@@ -77,18 +77,21 @@ function renderLoginPage(onAuthenticated) {
       }
 
       .login-logo-img {
-        width: 64px;
-        height: 64px;
-        object-fit: contain;
-        border-radius: 16px;
+        width: 72px;
+        height: 72px;
+        object-fit: cover;
+        border-radius: 20px;   /* clips the black corners of the PNG */
         margin-bottom: 14px;
-        filter: drop-shadow(0 4px 16px rgba(37,99,235,0.4));
+        box-shadow:
+          0 0 0 1px rgba(43,136,255,0.2),
+          0 8px 32px rgba(43,136,255,0.35),
+          0 2px 8px rgba(0,0,0,0.4);
         animation: logo-glow 3s ease-in-out infinite;
       }
 
       @keyframes logo-glow {
-        0%, 100% { filter: drop-shadow(0 4px 16px rgba(37,99,235,0.3)); }
-        50%       { filter: drop-shadow(0 4px 24px rgba(37,99,235,0.6)); }
+        0%, 100% { box-shadow: 0 0 0 1px rgba(43,136,255,0.2), 0 8px 32px rgba(43,136,255,0.3),  0 2px 8px rgba(0,0,0,0.4); }
+        50%       { box-shadow: 0 0 0 1px rgba(43,136,255,0.3), 0 8px 40px rgba(43,136,255,0.55), 0 2px 8px rgba(0,0,0,0.4); }
       }
 
       .login-brand-name {
@@ -239,16 +242,52 @@ function renderLoginPage(onAuthenticated) {
       }
       @keyframes spin { to { transform: rotate(360deg); } }
 
+      /* Hint toggle */
+      .login-hint-toggle {
+        background: none;
+        border: none;
+        color: rgba(255,255,255,0.2);
+        font-size: 11px;
+        font-family: inherit;
+        cursor: pointer;
+        padding: 0;
+        margin-top: 14px;
+        display: block;
+        width: 100%;
+        text-align: center;
+        transition: color 0.15s;
+      }
+      .login-hint-toggle:hover { color: rgba(255,255,255,0.45); }
+
+      .login-hint-box {
+        display: none;
+        margin-top: 10px;
+        background: rgba(43,136,255,0.06);
+        border: 1px solid rgba(43,136,255,0.15);
+        border-radius: 8px;
+        padding: 10px 14px;
+        font-size: 12px;
+        color: rgba(255,255,255,0.45);
+        line-height: 1.7;
+      }
+      .login-hint-box code {
+        font-family: 'JetBrains Mono', monospace;
+        color: rgba(43,136,255,0.9);
+        background: rgba(43,136,255,0.1);
+        padding: 1px 5px;
+        border-radius: 4px;
+      }
+
       /* Footer */
       .login-footer {
-        margin-top: 28px;
-        padding-top: 20px;
+        margin-top: 20px;
+        padding-top: 16px;
         border-top: 1px solid rgba(255,255,255,0.05);
         display: flex;
         align-items: center;
         justify-content: center;
         gap: 6px;
-        color: rgba(255,255,255,0.2);
+        color: rgba(255,255,255,0.18);
         font-size: 11px;
       }
       .login-footer-dot {
@@ -291,6 +330,13 @@ function renderLoginPage(onAuthenticated) {
         </div>
 
         <button id="login-btn" class="login-btn">Sign In</button>
+
+        <button class="login-hint-toggle" id="hint-toggle">Need login credentials? ›</button>
+        <div class="login-hint-box" id="hint-box">
+          <strong style="color:rgba(255,255,255,0.5)">Default accounts:</strong><br>
+          Admin: <code>admin</code> / <code>Admin1234!</code><br>
+          Officer: <code>officer1</code> / <code>Officer1234!</code>
+        </div>
 
         <div class="login-footer">
           <div class="login-footer-dot"></div>
@@ -346,6 +392,15 @@ function renderLoginPage(onAuthenticated) {
   });
   document.getElementById('login-username').addEventListener('keydown', e => {
     if (e.key === 'Enter') document.getElementById('login-password').focus();
+  });
+
+  // Hint toggle
+  const hintToggle = document.getElementById('hint-toggle');
+  const hintBox    = document.getElementById('hint-box');
+  hintToggle.addEventListener('click', () => {
+    const open = hintBox.style.display === 'block';
+    hintBox.style.display = open ? 'none' : 'block';
+    hintToggle.textContent = open ? 'Need login credentials? ›' : 'Hide credentials ‹';
   });
 
   // Auto-focus username

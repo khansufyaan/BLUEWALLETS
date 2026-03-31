@@ -105,6 +105,8 @@ let state = {
   currentShareError: null,
   custodianNameInput: '',
   sharesAcknowledged: 0,
+  sharesTotal: 5,         // set from entropy response
+  sharesThreshold: 3,     // set from entropy response
 
   // Reconstruction state
   reconstructShares: ['', '', ''],
@@ -123,33 +125,9 @@ let state = {
   selectedCoins: new Set(['BTC', 'ETH', 'SOL']),
 };
 
-// ─── Demo-mode helpers ────────────────────────────────────────────────────────
-
-const DEMO_ENTROPY   = 'a3f8c12d9b7e4561ae2f90b4c83d17e5f64a2b1c0d8e9f34ab7c6d5e821f0394';
-const DEMO_SHARES    = [
-  '0102' + 'ab34cd56ef78901234567890abcdef1234567890abcdef1234567890abcdef1234',
-  '0202' + 'bc45de67f0891234567890abcdef12345678901234567890abcdef1234567890ab',
-  '0302' + 'cd56ef78091234567890abcdef1234567890abcdef1234567890abcdef12345678',
-  '0402' + 'de67f089abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234',
-  '0502' + 'ef780123456789abcdef1234567890abcdef1234567890abcdef1234567890abcd',
-];
-const DEMO_MASTER_ID = 'ceremony:master:demo-00000000-0000-0000-0000-000000000001';
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function _sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
-
-async function demoConnectHsm()      { await _sleep(1600); return { provider: 'Demo (SoftHSM2)', tokenLabel: 'demo-partition', connected: true, slotIndex: 0 }; }
-async function demoGenerateEntropy() { await _sleep(900);  return { entropyHex: DEMO_ENTROPY, sharesGenerated: 5 }; }
-function      demoGetShare(i)        { return { shareHex: DEMO_SHARES[i] || DEMO_SHARES[0], index: i, total: 5 }; }
-async function demoReconstructAndSeal() {
-  await _sleep(1000);
-  return {
-    masterKeyId: DEMO_MASTER_ID,
-    publicKeyHex: '02' + DEMO_ENTROPY.repeat(2).slice(0, 64),
-    chainCodeHex: DEMO_ENTROPY.split('').reverse().join('').slice(0, 64),
-    derivationInfo: { seedHex: DEMO_ENTROPY.slice(0, 32) + '…', hmacPreviewHex: '5f4a3b2c…' },
-  };
-}
-async function demoCompleteCeremony(coinTypes) { await _sleep(300); return { completedAt: new Date().toISOString(), coinTypes }; }
 
 // ─── Confetti ─────────────────────────────────────────────────────────────────
 
@@ -491,7 +469,7 @@ function renderEntropy() {
           </div>
           <div class="cer-meta-item">
             <div class="cer-meta-label">Shares</div>
-            <div class="cer-meta-value">5 (threshold: 3)</div>
+            <div class="cer-meta-value">${state.sharesTotal} (threshold: ${state.sharesThreshold})${state.demoMode ? ' · demo' : ''}</div>
           </div>
         </div>
       </div>`;
@@ -556,12 +534,20 @@ function formatShareHex(hex) {
 function renderShares() {
   const idx = state.currentShareIndex;
   const custodianNum = idx + 1;
-  const allDone = state.sharesAcknowledged >= 5;
+  const total = state.sharesTotal;
+  const allDone = state.sharesAcknowledged >= total;
 
   return `
     <div class="cer-shares">
+      ${state.demoMode ? `
+        <div class="cer-demo-cta" style="margin-bottom:16px">
+          <div class="cer-demo-cta-text">
+            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 2l6 5-6 5V2z" fill="#F59E0B"/></svg>
+            Demo mode — 1 share only (no quorum needed)
+          </div>
+        </div>` : ''}
       <div class="cer-shares-progress">
-        ${[0,1,2,3,4].map(i => `
+        ${Array.from({length: total}, (_, i) => `
           <div class="cer-share-pip ${i < state.sharesAcknowledged ? 'done' : i === idx ? 'active' : ''}">
             ${i < state.sharesAcknowledged
               ? `<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5 4-4" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`
@@ -574,14 +560,16 @@ function renderShares() {
         <div class="cer-connect-success" style="margin:20px 0">
           <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#22C55E" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#22C55E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
           <div>
-            <div class="cer-connect-success-title">All 5 shares distributed</div>
+            <div class="cer-connect-success-title">All ${total} share${total > 1 ? 's' : ''} distributed</div>
             <div class="cer-connect-success-sub">Click Continue to proceed to reconstruction</div>
           </div>
         </div>` : `
         <div class="cer-share-header">
-          <div class="cer-share-title">Custodian ${custodianNum} of 5</div>
+          <div class="cer-share-title">${total > 1 ? `Custodian ${custodianNum} of ${total}` : 'Your single key share'}</div>
           <div class="cer-share-subtitle">
-            This is share ${custodianNum}. It will not be shown again after acknowledgement.
+            ${total > 1
+              ? `This is share ${custodianNum}. It will not be shown again after acknowledgement.`
+              : 'Record this share securely. You will enter it in the next step to seal the master key.'}
           </div>
         </div>
 
@@ -626,20 +614,24 @@ function renderShares() {
 }
 
 function renderReconstruct() {
+  const inputCount = state.sharesThreshold; // 1 in demo, 3 in production
+  const totalShares = state.sharesTotal;
+
   return `
     <div class="cer-reconstruct">
       <div class="cer-reconstruct-desc">
-        Enter any 3 of the 5 Shamir shares to reconstruct the entropy, derive the BIP-32 master key,
-        and seal it into the HSM as non-extractable.
+        ${inputCount === 1
+          ? 'Enter your single key share to derive the BIP-32 master key and seal it into the HSM as non-extractable.'
+          : `Enter any ${inputCount} of the ${totalShares} Shamir shares to reconstruct the entropy, derive the BIP-32 master key, and seal it into the HSM as non-extractable.`}
       </div>
 
       <div class="cer-reconstruct-inputs">
-        ${[0, 1, 2].map(i => `
+        ${Array.from({length: inputCount}, (_, i) => `
           <div class="cer-form-group">
-            <label class="cer-form-label" for="reconstruct-share-${i}">Share ${i + 1}</label>
+            <label class="cer-form-label" for="reconstruct-share-${i}">${inputCount > 1 ? `Share ${i + 1}` : 'Key Share'}</label>
             <textarea class="cer-share-textarea" id="reconstruct-share-${i}"
               rows="3" placeholder="Paste hex share here…"
-              spellcheck="false" autocomplete="off">${state.reconstructShares[i]}</textarea>
+              spellcheck="false" autocomplete="off">${state.reconstructShares[i] || ''}</textarea>
           </div>
         `).join('')}
       </div>
@@ -852,13 +844,13 @@ function renderStep() {
 }
 
 function nextDisabled() {
-  if (state.demoMode) return false; // demo: never block Continue
   const id = STEPS[state.step].id;
   if (id === 'connect')     return !state.hsmConnected;
-  if (id === 'initiate')    return false; // Continue button handles validation + submit
+  if (id === 'initiate')    return false; // Continue handles validation + submit
+  // approve: in demo mode, the initiate step already auto-approves
   if (id === 'approve')     return state.approvalStatus !== 'approved';
   if (id === 'entropy')     return !state.entropyDone;
-  if (id === 'shares')      return state.sharesAcknowledged < 5;
+  if (id === 'shares')      return state.sharesAcknowledged < state.sharesTotal;
   if (id === 'reconstruct') return !state.reconstructDone;
   return false;
 }
@@ -897,11 +889,13 @@ async function startEntropyFromHsm() {
   }, 80);
 
   try {
-    const result = await api.generateEntropy();
+    const result = await api.generateEntropy(state.demoMode);
     clearInterval(state.entropyInterval);
 
-    state.entropyHex = result.entropyHex;
-    state.entropyDone = true;
+    state.entropyHex      = result.entropyHex;
+    state.entropyDone     = true;
+    state.sharesTotal     = result.sharesGenerated;
+    state.sharesThreshold = result.sharesThreshold || (state.demoMode ? 1 : 3);
 
     state.logLines = [
       { label: 'bytes 01–16', value: result.entropyHex.slice(0, 32) },
@@ -930,9 +924,12 @@ async function startEntropyFromHsm() {
 
     const logHeader = document.querySelector('.cer-log-header');
     if (logHeader) {
+      const scheme = state.demoMode
+        ? `1-of-1 Shamir (demo)`
+        : `${result.sharesGenerated} shares · threshold ${state.sharesThreshold}`;
       logHeader.innerHTML = `
         <span class="cer-log-dot" style="background:var(--emerald)"></span>
-        C_GenerateRandom · ${result.entropyHex.length * 4} bits · real HSM entropy → ${result.sharesGenerated} shares`;
+        C_GenerateRandom · 256 bits · real HSM entropy · ${scheme}`;
     }
 
     const nb = nextBtn();
@@ -968,9 +965,7 @@ async function loadCurrentShare() {
   rebuildCeremony();
 
   try {
-    const result = state.demoMode
-      ? (await _sleep(300), demoGetShare(state.currentShareIndex))
-      : await api.getShare(state.currentShareIndex);
+    const result = await api.getShare(state.currentShareIndex);
     state.currentShare = result.shareHex;
     state.currentShareLoading = false;
     rebuildCeremony();
@@ -983,9 +978,7 @@ async function loadCurrentShare() {
 
 async function finishCeremony() {
   try {
-    const result = state.demoMode
-      ? await demoCompleteCeremony([...state.selectedCoins])
-      : await api.completeCeremony([...state.selectedCoins]);
+    const result = await api.completeCeremony([...state.selectedCoins]);
     state.completedAt = result.completedAt;
   } catch (err) {
     console.error('Failed to complete ceremony:', err);
@@ -1044,17 +1037,19 @@ function initCeremonyHandlers(root) {
         nextBtn.disabled = true;
         nextBtn.textContent = 'Submitting\u2026';
         try {
-          let result;
+          // Initiate is always real
+          const initiated = await api.initiateCeremony({ reason: state.approvalReason });
+          state.approvalId          = initiated.id;
+          state.approvalStatus      = initiated.status;
+          state.approvalCount       = initiated.approvals.length;
+          state.approvalRequestedBy = initiated.requestedByDisplay || '';
+
+          // In demo mode: immediately auto-approve (no second person needed)
           if (state.demoMode) {
-            await _sleep(400);
-            result = { id: 'demo-request-0001', status: 'approved', approvals: [{},{} ], requestedByDisplay: 'Demo Admin' };
-          } else {
-            result = await api.initiateCeremony({ reason: state.approvalReason });
+            const approved = await api.demoApprove(initiated.id);
+            state.approvalStatus = approved.status;
+            state.approvalCount  = approved.approvals.length;
           }
-          state.approvalId = result.id;
-          state.approvalStatus = result.status;
-          state.approvalCount = result.approvals.length;
-          state.approvalRequestedBy = result.requestedByDisplay || '';
         } catch (err) {
           nextBtn.disabled = false;
           nextBtn.textContent = 'Continue \u2192';
@@ -1080,7 +1075,7 @@ function initCeremonyHandlers(root) {
   if (stepId === 'connect')     attachConnectHandlers(root);
   // initiate step: submission handled by Continue in nextBtn above
   if (stepId === 'approve')     attachApproveHandlers(root);
-  if (stepId === 'entropy')     (state.demoMode ? startDemoEntropy() : startEntropyFromHsm());
+  if (stepId === 'entropy')     startEntropyFromHsm();
   if (stepId === 'shares')      attachShareHandlers(root);
   if (stepId === 'reconstruct') attachReconstructHandlers(root);
   if (stepId === 'accounts')    attachAccountHandlers(root);
@@ -1298,8 +1293,7 @@ function attachShareHandlers(root) {
       ackBtn.textContent = 'Recording…';
 
       try {
-        if (!state.demoMode) await api.acknowledgeShare(state.currentShareIndex);
-        else await _sleep(200);
+        await api.acknowledgeShare(state.currentShareIndex);
         state.sharesAcknowledged++;
         state.currentShareIndex++;
         state.currentShare = null;
@@ -1329,8 +1323,10 @@ function attachShareHandlers(root) {
 // ─── Reconstruct handlers ─────────────────────────────────────────────────────
 
 function attachReconstructHandlers(root) {
+  const inputCount = state.sharesThreshold; // 1 in demo, 3 in production
+
   // Sync textarea values to state on input
-  [0, 1, 2].forEach(i => {
+  Array.from({length: inputCount}, (_, i) => i).forEach(i => {
     const ta = root.querySelector(`#reconstruct-share-${i}`);
     if (ta) {
       ta.addEventListener('input', () => {
@@ -1344,13 +1340,15 @@ function attachReconstructHandlers(root) {
 
   sealBtn.addEventListener('click', async () => {
     // Read current textarea values
-    const shares = [0, 1, 2].map(i => {
+    const shares = Array.from({length: inputCount}, (_, i) => {
       const ta = document.getElementById(`reconstruct-share-${i}`);
-      return (ta ? ta.value.trim() : state.reconstructShares[i]);
+      return (ta ? ta.value.trim() : state.reconstructShares[i] || '');
     }).filter(s => s.length > 0);
 
-    if (shares.length < 3) {
-      state.reconstructError = 'All 3 share fields must be filled in.';
+    if (shares.length < inputCount) {
+      state.reconstructError = inputCount === 1
+        ? 'Please paste your key share.'
+        : `All ${inputCount} share fields must be filled in.`;
       rebuildCeremony();
       return;
     }
@@ -1361,9 +1359,7 @@ function attachReconstructHandlers(root) {
     rebuildCeremony();
 
     try {
-      const result = state.demoMode
-        ? await demoReconstructAndSeal()
-        : await api.reconstructAndSeal(shares);
+      const result = await api.reconstructAndSeal(shares);
       state.masterKeyId    = result.masterKeyId;
       state.publicKeyHex   = result.publicKeyHex;
       state.chainCodeHex   = result.chainCodeHex;
@@ -1414,120 +1410,13 @@ function updatePathPreview() {
 
 // ─── Demo mode activation ─────────────────────────────────────────────────────
 
-async function activateDemoMode() {
+function activateDemoMode() {
+  // Demo mode: everything is REAL (real HSM, real entropy, real keys)
+  // The ONLY difference: single-person flow, 1 Shamir share instead of 5
   state.demoMode = true;
-
-  // Animate the HSM connect stages without real API
-  state.hsmConnecting   = true;
-  state.hsmConnected    = false;
-  state.hsmConnectError = null;
-  state.hsmConnectStage = 0;
   rebuildCeremony();
-
-  const delay = 350;
-  for (let i = 1; i <= 4; i++) {
-    await _sleep(delay);
-    state.hsmConnectStage = i;
-    // Patch the checklist in-place
-    const root = document.querySelector('.cer-root');
-    if (root) {
-      const tmp = document.createElement('div');
-      tmp.innerHTML = renderConnect();
-      const existing = root.querySelector('.cer-connect');
-      if (existing) existing.replaceWith(tmp.firstElementChild);
-    }
-  }
-
-  await _sleep(delay);
-  state.hsmConnecting = false;
-  state.hsmConnected  = true;
-  state.hsmProvider   = 'Demo (SoftHSM2)';
-  state.hsmTokenLabel = 'demo-partition';
-  rebuildCeremony();
-
-  // Celebrate
-  setTimeout(fireConfetti, 120);
-  setTimeout(() => {
-    const ring = document.getElementById('electric-ring');
-    if (ring) ring.classList.add('cer-electric-active');
-  }, 250);
 }
 
-// ─── Demo entropy (runs instead of real HSM) ──────────────────────────────────
-
-async function startDemoEntropy() {
-  state.entropyDone  = false;
-  state.entropyError = null;
-  state.logLines     = [];
-
-  const arc    = () => document.getElementById('entropy-arc');
-  const pct    = () => document.getElementById('entropy-pct');
-  const lines  = () => document.getElementById('entropy-lines');
-  const nextBtn = () => document.getElementById('cer-next');
-
-  let progress = 0;
-  state.entropyInterval = setInterval(() => {
-    progress = Math.min(progress + Math.random() * 3 + 0.5, 90);
-    const el = arc(); const pe = pct();
-    if (el) el.style.strokeDashoffset = 326.7 * (1 - progress / 100);
-    if (pe) pe.textContent = Math.round(progress) + '%';
-
-    const linesEl = lines();
-    if (linesEl) {
-      const hex = Array.from({ length: 16 }, () =>
-        Math.floor(Math.random() * 256).toString(16).padStart(2, '0')
-      ).join(' ');
-      const line = document.createElement('div');
-      line.className = 'cer-log-line';
-      line.textContent = hex;
-      if (linesEl.children.length >= 8) linesEl.removeChild(linesEl.firstChild);
-      linesEl.appendChild(line);
-    }
-  }, 80);
-
-  await _sleep(1600);
-  clearInterval(state.entropyInterval);
-
-  const result = await demoGenerateEntropy();
-  state.entropyHex = result.entropyHex;
-  state.entropyDone = true;
-
-  state.logLines = [
-    { label: 'bytes 01–16', value: result.entropyHex.slice(0, 32) },
-    { label: 'bytes 17–32', value: result.entropyHex.slice(32, 64) },
-  ];
-
-  const arcEl = arc();
-  if (arcEl) { arcEl.style.transition = 'stroke-dashoffset 0.3s ease,stroke 0.3s ease'; arcEl.style.strokeDashoffset = '0'; arcEl.style.stroke = '#22C55E'; }
-  const pctEl = pct();
-  if (pctEl) { pctEl.textContent = '100%'; pctEl.style.color = 'var(--emerald)'; }
-
-  const linesEl = lines();
-  if (linesEl) {
-    linesEl.innerHTML = '';
-    state.logLines.forEach(({ label, value }) => {
-      const line = document.createElement('div');
-      line.className = 'cer-log-line cer-log-line-labeled';
-      line.innerHTML = `<span class="cer-log-byte-range">${label}</span><span>${value}</span>`;
-      linesEl.appendChild(line);
-    });
-  }
-
-  const logHeader = document.querySelector('.cer-log-header');
-  if (logHeader) {
-    logHeader.innerHTML = `<span class="cer-log-dot" style="background:var(--emerald)"></span>
-      C_GenerateRandom · DEMO · ${result.sharesGenerated} shares generated`;
-  }
-
-  const nb = nextBtn();
-  if (nb) nb.disabled = false;
-
-  setTimeout(() => {
-    state.currentShareIndex  = 0;
-    state.sharesAcknowledged = 0;
-    transition('next');
-  }, 1500);
-}
 
 export function initCeremony() {
   const root = document.querySelector('.cer-root');

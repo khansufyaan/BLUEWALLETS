@@ -24,8 +24,9 @@ import { CeremonyApprovalService } from './ceremony-approval-service';
 import { logger } from '../utils/logger';
 
 export interface CeremonyEntropy {
-  entropyHex: string;     // raw 256-bit hex from HSM
-  sharesGenerated: number; // number of shares created
+  entropyHex: string;       // raw 256-bit hex from HSM
+  sharesGenerated: number;  // total shares created
+  sharesThreshold: number;  // minimum shares needed to reconstruct (3 production, 1 demo)
 }
 
 export interface CeremonyMasterKey {
@@ -47,6 +48,9 @@ export interface CeremonyState {
   coinTypes: string[];
   sharesAcknowledged: number; // count of acknowledged shares
   entropyGenerated: boolean;
+  sharesTotal: number;
+  sharesThreshold: number;
+  demoMode: boolean;
 }
 
 export class CeremonyService {
@@ -58,8 +62,11 @@ export class CeremonyService {
     publicKeyHex: string | null;
     coinTypes: string[];
     entropyBuffer: Buffer | null;  // raw entropy, cleared after seal
-    sharesHex: string[] | null;    // 5 shares, cleared after seal
+    sharesHex: string[] | null;    // N shares, cleared after seal
     sharesAcknowledged: boolean[]; // which shares have been acknowledged
+    sharesThreshold: number;       // min shares needed to reconstruct (3 production, 1 demo)
+    sharesTotal: number;           // total shares generated (5 production, 1 demo)
+    demoMode: boolean;             // when true: 1-of-1 Shamir, self-approval allowed
   } = {
     completed: false,
     completedAt: null,
@@ -70,6 +77,9 @@ export class CeremonyService {
     entropyBuffer: null,
     sharesHex: null,
     sharesAcknowledged: [],
+    sharesThreshold: 3,
+    sharesTotal: 5,
+    demoMode: false,
   };
 
   constructor(
@@ -79,7 +89,7 @@ export class CeremonyService {
 
   // ── Step 1: Generate entropy from HSM (requires approved ceremony) ─────────
 
-  async generateEntropy(): Promise<CeremonyEntropy> {
+  async generateEntropy(demoMode = false): Promise<CeremonyEntropy> {
     const approval = this.approvalService.getActive();
     if (!approval || approval.status !== 'approved') {
       throw new Error('Ceremony not approved. Two officers must approve before generating entropy.');
@@ -88,30 +98,38 @@ export class CeremonyService {
     const session = this.hsmSession.getSession();
     const pkcs11 = this.hsmSession.getPkcs11();
 
-    logger.info('Generating 256-bit entropy via C_GenerateRandom');
+    // Demo mode: 1-of-1 Shamir (single share, no quorum needed)
+    const sharesTotal    = demoMode ? 1 : 5;
+    const sharesThreshold = demoMode ? 1 : 3;
+
+    logger.info('Generating 256-bit entropy via C_GenerateRandom', { demoMode, sharesTotal, sharesThreshold });
 
     // Pull 32 bytes (256 bits) from the HSM's hardware RNG
     const entropyBuffer = Buffer.alloc(32);
     const result = pkcs11.C_GenerateRandom(session, entropyBuffer);
 
-    // Split entropy into 5 Shamir shares with threshold 3
-    const shareBuffers: Buffer[] = sss.split(result, { shares: 5, threshold: 3 });
+    // Split entropy into Shamir shares
+    const shareBuffers: Buffer[] = sss.split(result, { shares: sharesTotal, threshold: sharesThreshold });
     const shares: string[] = shareBuffers.map((b: Buffer) => b.toString('hex'));
 
     // Store in state
-    this.state.entropyBuffer = result;
-    this.state.sharesHex = shares;
-    this.state.sharesAcknowledged = new Array(5).fill(false);
+    this.state.entropyBuffer    = result;
+    this.state.sharesHex        = shares;
+    this.state.sharesAcknowledged = new Array(sharesTotal).fill(false);
+    this.state.sharesThreshold  = sharesThreshold;
+    this.state.sharesTotal      = sharesTotal;
+    this.state.demoMode         = demoMode;
 
     logger.info('Entropy generated and split into Shamir shares', {
       entropyLength: result.length,
       shareCount: shares.length,
-      threshold: 3,
+      threshold: sharesThreshold,
     });
 
     return {
-      entropyHex: result.toString('hex'),
+      entropyHex:      result.toString('hex'),
       sharesGenerated: shares.length,
+      sharesThreshold,
     };
   }
 
@@ -143,8 +161,9 @@ export class CeremonyService {
   // ── Step 4: Reconstruct entropy from shares, derive and seal master key ────
 
   async reconstructAndSeal(submittedShares: string[]): Promise<CeremonyMasterKey> {
-    if (submittedShares.length < 3) {
-      throw new Error('At least 3 Shamir shares are required to reconstruct the master key.');
+    const requiredShares = this.state.sharesThreshold;
+    if (submittedShares.length < requiredShares) {
+      throw new Error(`At least ${requiredShares} Shamir share${requiredShares > 1 ? 's are' : ' is'} required to reconstruct the master key.`);
     }
 
     const activeApproval = this.approvalService.getActive();
@@ -233,14 +252,17 @@ export class CeremonyService {
 
   getStatus(): CeremonyState {
     return {
-      completed: this.state.completed,
-      completedAt: this.state.completedAt,
-      masterKeyId: this.state.masterKeyId,
-      chainCodeHex: this.state.chainCodeHex,
-      publicKeyHex: this.state.publicKeyHex,
-      coinTypes: this.state.coinTypes,
+      completed:         this.state.completed,
+      completedAt:       this.state.completedAt,
+      masterKeyId:       this.state.masterKeyId,
+      chainCodeHex:      this.state.chainCodeHex,
+      publicKeyHex:      this.state.publicKeyHex,
+      coinTypes:         this.state.coinTypes,
       sharesAcknowledged: this.state.sharesAcknowledged.filter(Boolean).length,
-      entropyGenerated: this.state.sharesHex !== null || this.state.masterKeyId !== null,
+      entropyGenerated:  this.state.sharesHex !== null || this.state.masterKeyId !== null,
+      sharesTotal:       this.state.sharesTotal,
+      sharesThreshold:   this.state.sharesThreshold,
+      demoMode:          this.state.demoMode,
     };
   }
 

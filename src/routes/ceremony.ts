@@ -115,18 +115,39 @@ export function createCeremonyRoutes(
 
   /**
    * POST /api/v1/ceremony/entropy
-   * Generate 256-bit entropy from HSM C_GenerateRandom and split into 5 Shamir shares.
+   * Generate 256-bit entropy from HSM C_GenerateRandom and split into Shamir shares.
+   * Body: { demo?: boolean } — demo=true uses 1-of-1 Shamir (single share, no quorum)
    * Requires an approved ceremony request.
    */
-  router.post('/entropy', requireAuth(authService), async (_req: Request, res: Response) => {
+  router.post('/entropy', requireAuth(authService), async (req: Request, res: Response) => {
     try {
-      logger.info('Ceremony: generating entropy from HSM');
-      const result = await ceremonyService.generateEntropy();
+      const demoMode = req.body?.demo === true;
+      logger.info('Ceremony: generating entropy from HSM', { demoMode });
+      const result = await ceremonyService.generateEntropy(demoMode);
       res.json(result);
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Entropy generation failed';
       logger.error('Entropy generation failed', { error });
       res.status(500).json({ error: msg });
+    }
+  });
+
+  /**
+   * POST /api/v1/ceremony/demo-approve
+   * Demo-only: force-approve the active request without needing a second person.
+   * Body: { requestId: string }
+   */
+  router.post('/demo-approve', requireAuth(authService), (req: Request, res: Response) => {
+    try {
+      const { requestId } = req.body as { requestId: string };
+      if (!requestId) { res.status(400).json({ error: 'requestId is required' }); return; }
+      logger.info('Ceremony: demo-approve requested', { requestId });
+      const approval = approvalService.demoApprove(requestId);
+      res.json(approval);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Demo approval failed';
+      logger.error('Demo approval failed', { error });
+      res.status(400).json({ error: msg });
     }
   });
 

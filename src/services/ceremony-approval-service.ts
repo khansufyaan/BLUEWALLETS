@@ -121,6 +121,24 @@ export class CeremonyApprovalService {
   }
 
   /**
+   * Demo-mode: force-approve the active request without requiring real officers.
+   * Used only for single-operator investor demonstrations.
+   */
+  demoApprove(requestId: string): CeremonyApproval {
+    const approval = this.getActive();
+    if (!approval) throw new Error('No active approval request.');
+    if (approval.id !== requestId) throw new Error('Request ID mismatch.');
+
+    approval.approvals = [
+      { userId: 'demo-officer-1', displayName: 'Demo Officer A', approvedAt: new Date() },
+      { userId: 'demo-officer-2', displayName: 'Demo Officer B', approvedAt: new Date() },
+    ];
+    approval.status = 'approved';
+    logger.info('Ceremony demo-approval granted (both officers simulated)', { id: requestId });
+    return approval;
+  }
+
+  /**
    * Mark an approval as used (after the ceremony has completed).
    */
   markUsed(requestId: string): void {

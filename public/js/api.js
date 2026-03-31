@@ -98,10 +98,12 @@ export const api = {
 
   // Key Ceremony
   getCeremonyStatus:  () => request('/ceremony/status'),
-  generateEntropy:    () => request('/ceremony/entropy', { method: 'POST' }),
+  generateEntropy:    (demo = false) => request('/ceremony/entropy', { method: 'POST', body: JSON.stringify({ demo }) }),
   completeCeremony:   (coinTypes) => request('/ceremony/complete', { method: 'POST', body: JSON.stringify({ coinTypes }) }),
   initiateCeremony:   (body) => request('/ceremony/initiate', { method: 'POST', body: JSON.stringify({ reason: body.reason }) }),
   approveCeremony:    (body) => request('/ceremony/approve', { method: 'POST', body: JSON.stringify({ requestId: body.requestId }) }),
+  demoApprove:        (requestId) => request('/ceremony/demo-approve', { method: 'POST', body: JSON.stringify({ requestId }) }),
+  cancelCeremony:     () => request('/ceremony/cancel', { method: 'POST' }),
   getApprovalStatus:  () => request('/ceremony/approval'),
   getShare:           (index) => request(`/ceremony/shares/${index}`),
   acknowledgeShare:   (index) => request(`/ceremony/shares/${index}/acknowledge`, { method: 'POST' }),

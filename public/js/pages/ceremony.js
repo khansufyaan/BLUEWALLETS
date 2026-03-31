@@ -66,6 +66,9 @@ const BIP44_COINS = [
 let state = {
   step: 0,
 
+  // Demo mode
+  demoMode: false,
+
   // HSM connect step
   hsmConnected: false,
   hsmProvider: null,
@@ -75,6 +78,7 @@ let state = {
   hsmConnectError: null,
   hsmTokenLabel: null,
   selectedPreset: 'luna',
+  hsmConnectStage: 0, // 0=idle, 1=library, 2=slots, 3=session, 4=auth, 5=done
 
   // Approval state
   approvalId: null,
@@ -119,6 +123,80 @@ let state = {
   selectedCoins: new Set(['BTC', 'ETH', 'SOL']),
 };
 
+// ─── Demo-mode helpers ────────────────────────────────────────────────────────
+
+const DEMO_ENTROPY   = 'a3f8c12d9b7e4561ae2f90b4c83d17e5f64a2b1c0d8e9f34ab7c6d5e821f0394';
+const DEMO_SHARES    = [
+  '0102' + 'ab34cd56ef78901234567890abcdef1234567890abcdef1234567890abcdef1234',
+  '0202' + 'bc45de67f0891234567890abcdef12345678901234567890abcdef1234567890ab',
+  '0302' + 'cd56ef78091234567890abcdef1234567890abcdef1234567890abcdef12345678',
+  '0402' + 'de67f089abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234',
+  '0502' + 'ef780123456789abcdef1234567890abcdef1234567890abcdef1234567890abcd',
+];
+const DEMO_MASTER_ID = 'ceremony:master:demo-00000000-0000-0000-0000-000000000001';
+
+function _sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+async function demoConnectHsm()      { await _sleep(1600); return { provider: 'Demo (SoftHSM2)', tokenLabel: 'demo-partition', connected: true, slotIndex: 0 }; }
+async function demoGenerateEntropy() { await _sleep(900);  return { entropyHex: DEMO_ENTROPY, sharesGenerated: 5 }; }
+function      demoGetShare(i)        { return { shareHex: DEMO_SHARES[i] || DEMO_SHARES[0], index: i, total: 5 }; }
+async function demoReconstructAndSeal() {
+  await _sleep(1000);
+  return {
+    masterKeyId: DEMO_MASTER_ID,
+    publicKeyHex: '02' + DEMO_ENTROPY.repeat(2).slice(0, 64),
+    chainCodeHex: DEMO_ENTROPY.split('').reverse().join('').slice(0, 64),
+    derivationInfo: { seedHex: DEMO_ENTROPY.slice(0, 32) + '…', hmacPreviewHex: '5f4a3b2c…' },
+  };
+}
+async function demoCompleteCeremony(coinTypes) { await _sleep(300); return { completedAt: new Date().toISOString(), coinTypes }; }
+
+// ─── Confetti ─────────────────────────────────────────────────────────────────
+
+function fireConfetti() {
+  const canvas = document.createElement('canvas');
+  canvas.style.cssText = 'position:fixed;top:0;left:0;width:100vw;height:100vh;pointer-events:none;z-index:9999';
+  document.body.appendChild(canvas);
+  canvas.width  = window.innerWidth;
+  canvas.height = window.innerHeight;
+  const ctx = canvas.getContext('2d');
+  const COLORS = ['#22C55E','#2563EB','#F59E0B','#EF4444','#8B5CF6','#EC4899','#06B6D4'];
+  const pieces = Array.from({ length: 100 }, () => ({
+    x:  Math.random() * canvas.width,
+    y: -20 - Math.random() * 80,
+    vx: (Math.random() - 0.5) * 5,
+    vy: Math.random() * 4 + 2,
+    w:  Math.random() * 10 + 5,
+    h:  Math.random() * 6 + 3,
+    r:  Math.random() * Math.PI * 2,
+    dr: (Math.random() - 0.5) * 0.2,
+    color: COLORS[Math.floor(Math.random() * COLORS.length)],
+  }));
+  let frame = 0;
+  function draw() {
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    let alive = false;
+    pieces.forEach(p => {
+      p.x  += p.vx;
+      p.y  += p.vy;
+      p.vy += 0.06;
+      p.r  += p.dr;
+      if (p.y < canvas.height + 30) { alive = true; }
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.r);
+      ctx.fillStyle = p.color;
+      ctx.globalAlpha = Math.max(0, 1 - frame / 160);
+      ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+      ctx.restore();
+    });
+    frame++;
+    if (alive && frame < 200) requestAnimationFrame(draw);
+    else canvas.remove();
+  }
+  draw();
+}
+
 // ─── Step renderers ──────────────────────────────────────────────────────────
 
 function renderConnect() {
@@ -127,8 +205,92 @@ function renderConnect() {
   const os = ua.includes('win') ? 'win' : ua.includes('mac') ? 'macos' : 'linux';
   const defaultLib = state.hsmLibrary || preset.paths[os] || preset.paths.linux || '';
 
+  const STAGE_LABELS = [
+    'Loading PKCS#11 library',
+    'Scanning HSM partitions',
+    'Opening session',
+    'Authenticating PIN',
+  ];
+
+  // ── Connected success state ──────────────────────────────
+  if (state.hsmConnected) {
+    return `
+      <div class="cer-connect">
+        <div class="cer-hsm-connected-hero">
+          <div class="cer-electric-ring" id="electric-ring">
+            <svg width="80" height="80" viewBox="0 0 80 80" fill="none">
+              <circle cx="40" cy="40" r="36" stroke="rgba(34,197,94,0.15)" stroke-width="2"/>
+              <circle cx="40" cy="40" r="28" stroke="rgba(34,197,94,0.25)" stroke-width="2"/>
+              <circle cx="40" cy="40" r="20" fill="rgba(34,197,94,0.12)" stroke="#22C55E" stroke-width="1.5"/>
+              <path d="M34 38l4-7 2 5h4l-4 7-2-5h-4z" fill="#22C55E" class="cer-bolt"/>
+            </svg>
+          </div>
+          <div class="cer-hsm-connected-info">
+            <div class="cer-hsm-connected-title">HSM Connected</div>
+            <div class="cer-hsm-connected-sub">${state.hsmProvider || 'PKCS#11 Device'} · Token: ${state.hsmTokenLabel || 'Ready'}</div>
+          </div>
+        </div>
+
+        <div class="cer-checklist">
+          ${STAGE_LABELS.map((label, i) => `
+            <div class="cer-checklist-item cer-checklist-done" style="animation-delay:${i * 60}ms">
+              <div class="cer-checklist-icon">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6l2.5 2.5 5.5-5" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </div>
+              <span>${label}</span>
+            </div>
+          `).join('')}
+        </div>
+
+        <div class="cer-connect-action" style="margin-top:8px">
+          <button class="btn btn-ghost" id="hsm-connect-btn" style="font-size:12px">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            Re-test Connection
+          </button>
+        </div>
+      </div>`;
+  }
+
+  // ── Connecting state ─────────────────────────────────────
+  if (state.hsmConnecting) {
+    const stage = state.hsmConnectStage; // 0-4
+    return `
+      <div class="cer-connect">
+        <div class="cer-checklist-header">Establishing HSM connection…</div>
+        <div class="cer-checklist">
+          ${STAGE_LABELS.map((label, i) => {
+            const done   = i < stage;
+            const active = i === stage;
+            return `
+              <div class="cer-checklist-item ${done ? 'cer-checklist-done' : active ? 'cer-checklist-active' : 'cer-checklist-wait'}">
+                <div class="cer-checklist-icon">
+                  ${done
+                    ? `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6l2.5 2.5 5.5-5" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+                    : active
+                      ? `<div class="cer-spinner-sm" style="width:10px;height:10px;border-width:2px"></div>`
+                      : `<span style="font-size:9px;color:var(--text-tertiary)">${i+1}</span>`}
+                </div>
+                <span>${label}${active ? '…' : done ? '' : ''}</span>
+              </div>`;
+          }).join('')}
+        </div>
+      </div>`;
+  }
+
+  // ── Idle / error state ────────────────────────────────────
   return `
     <div class="cer-connect">
+
+      <!-- Demo mode CTA -->
+      <div class="cer-demo-cta">
+        <div class="cer-demo-cta-text">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 2l6 5-6 5V2z" fill="#F59E0B"/></svg>
+          Running an investor demo?
+        </div>
+        <button class="btn cer-demo-btn" id="demo-mode-btn">
+          🎬 Enter Demo Mode
+        </button>
+      </div>
 
       <!-- Vendor picker -->
       <div class="cer-connect-section">
@@ -171,22 +333,10 @@ function renderConnect() {
 
       <!-- Connect button + status -->
       <div class="cer-connect-action">
-        <button class="btn btn-primary" id="hsm-connect-btn" ${state.hsmConnecting ? 'disabled' : ''}>
-          ${state.hsmConnecting
-            ? `<div class="cer-spinner-sm" style="width:14px;height:14px;border-width:2px"></div> Connecting…`
-            : state.hsmConnected
-              ? `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7l3.5 3.5 6.5-7" stroke="white" stroke-width="1.5" stroke-linecap="round"/></svg> Re-test Connection`
-              : `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg> Connect`}
+        <button class="btn btn-primary" id="hsm-connect-btn">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1v12M1 7h12" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          Connect
         </button>
-
-        ${state.hsmConnected ? `
-          <div class="cer-connect-success">
-            <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#22C55E" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#22C55E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-            <div>
-              <div class="cer-connect-success-title">Connected · ${state.hsmProvider || 'HSM'}</div>
-              ${state.hsmTokenLabel ? `<div class="cer-connect-success-sub">Token: ${state.hsmTokenLabel}</div>` : ''}
-            </div>
-          </div>` : ''}
 
         ${state.hsmConnectError ? `
           <div class="cer-connect-error">
@@ -220,6 +370,23 @@ function renderInitiate() {
 function renderApprove() {
   const count = state.approvalCount;
   const isApproved = state.approvalStatus === 'approved';
+
+  // Demo mode: show bypass UI
+  if (state.demoMode) {
+    return `
+      <div class="cer-approve">
+        <div class="cer-connect-success" style="margin-bottom:16px">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#22C55E" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#22C55E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <div>
+            <div class="cer-connect-success-title">Demo Mode — Officer Approval Bypassed</div>
+            <div class="cer-connect-success-sub">2 of 2 approvals auto-granted · ID: ${state.approvalId || 'demo-request-0001'}</div>
+          </div>
+        </div>
+        <div style="font-size:12px;color:var(--text-tertiary);line-height:1.6">
+          In production: two independent officers log in sequentially and each approve this request before entropy generation can begin.
+        </div>
+      </div>`;
+  }
 
   return `
     <div class="cer-approve">
@@ -619,6 +786,20 @@ export function renderCeremony() {
 
   return `
     <div class="cer-root">
+
+      ${state.demoMode ? `
+        <div class="cer-demo-banner">
+          <div class="cer-demo-banner-inner">
+            <div class="cer-demo-banner-left">
+              <span class="cer-demo-badge">🎬 DEMO MODE</span>
+              <span class="cer-demo-banner-msg">Security checks bypassed for demonstration. Not for production use.</span>
+            </div>
+            <div class="cer-demo-banner-detail">
+              <strong>Production flow:</strong> real HSM · dual-officer sequential login · Shamir 3-of-5 physical key shares
+            </div>
+          </div>
+        </div>` : ''}
+
       <div class="cer-stepper">
         ${STEPS.map((s, i) => `
           <div class="cer-step-dot ${i < state.step ? 'done' : i === state.step ? 'active' : ''}">
@@ -671,6 +852,7 @@ function renderStep() {
 }
 
 function nextDisabled() {
+  if (state.demoMode) return false; // demo: never block Continue
   const id = STEPS[state.step].id;
   if (id === 'connect')     return !state.hsmConnected;
   if (id === 'initiate')    return false; // Continue button handles validation + submit
@@ -786,7 +968,9 @@ async function loadCurrentShare() {
   rebuildCeremony();
 
   try {
-    const result = await api.getShare(state.currentShareIndex);
+    const result = state.demoMode
+      ? (await _sleep(300), demoGetShare(state.currentShareIndex))
+      : await api.getShare(state.currentShareIndex);
     state.currentShare = result.shareHex;
     state.currentShareLoading = false;
     rebuildCeremony();
@@ -799,7 +983,9 @@ async function loadCurrentShare() {
 
 async function finishCeremony() {
   try {
-    const result = await api.completeCeremony([...state.selectedCoins]);
+    const result = state.demoMode
+      ? await demoCompleteCeremony([...state.selectedCoins])
+      : await api.completeCeremony([...state.selectedCoins]);
     state.completedAt = result.completedAt;
   } catch (err) {
     console.error('Failed to complete ceremony:', err);
@@ -850,15 +1036,21 @@ function initCeremonyHandlers(root) {
 
       if (stepId === 'initiate') {
         const reason = document.getElementById('initiate-reason')?.value?.trim();
-        if (!reason) {
+        if (!reason && !state.demoMode) {
           alert('Please enter a reason for the ceremony.');
           return;
         }
-        state.approvalReason = reason;
+        state.approvalReason = reason || 'Investor Demo — Blue Wallets';
         nextBtn.disabled = true;
         nextBtn.textContent = 'Submitting\u2026';
         try {
-          const result = await api.initiateCeremony({ reason });
+          let result;
+          if (state.demoMode) {
+            await _sleep(400);
+            result = { id: 'demo-request-0001', status: 'approved', approvals: [{},{} ], requestedByDisplay: 'Demo Admin' };
+          } else {
+            result = await api.initiateCeremony({ reason: state.approvalReason });
+          }
           state.approvalId = result.id;
           state.approvalStatus = result.status;
           state.approvalCount = result.approvals.length;
@@ -888,7 +1080,7 @@ function initCeremonyHandlers(root) {
   if (stepId === 'connect')     attachConnectHandlers(root);
   // initiate step: submission handled by Continue in nextBtn above
   if (stepId === 'approve')     attachApproveHandlers(root);
-  if (stepId === 'entropy')     startEntropyFromHsm();
+  if (stepId === 'entropy')     (state.demoMode ? startDemoEntropy() : startEntropyFromHsm());
   if (stepId === 'shares')      attachShareHandlers(root);
   if (stepId === 'reconstruct') attachReconstructHandlers(root);
   if (stepId === 'accounts')    attachAccountHandlers(root);
@@ -913,25 +1105,62 @@ async function handleHsmConnect() {
   state.hsmConnecting   = true;
   state.hsmConnected    = false;
   state.hsmConnectError = null;
+  state.hsmConnectStage = 0;
   rebuildCeremony();
+
+  // Animate through stages while API call is in-flight
+  const stageTimers = [
+    setTimeout(() => { state.hsmConnectStage = 1; _patchConnectStage(); }, 250),
+    setTimeout(() => { state.hsmConnectStage = 2; _patchConnectStage(); }, 600),
+    setTimeout(() => { state.hsmConnectStage = 3; _patchConnectStage(); }, 1000),
+  ];
+
+  function _patchConnectStage() {
+    // Lightweight DOM patch — no full rebuild needed
+    const root = document.querySelector('.cer-root');
+    if (root) {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = renderConnect();
+      const existing = root.querySelector('.cer-connect');
+      if (existing) existing.replaceWith(tmp.firstElementChild);
+    }
+  }
 
   try {
     const result = await api.connectHsm({ pkcs11Library: lib, slotIndex: slot, pin });
+    stageTimers.forEach(clearTimeout);
+
+    state.hsmConnectStage = 4;
     state.hsmConnected    = true;
     state.hsmConnecting   = false;
     state.hsmProvider     = result.provider;
     state.hsmTokenLabel   = result.tokenLabel || null;
     state.hsmConnectError = null;
     rebuildCeremony();
+
+    // Fire confetti + trigger electricity animation
+    setTimeout(fireConfetti, 100);
+    setTimeout(() => {
+      const ring = document.getElementById('electric-ring');
+      if (ring) ring.classList.add('cer-electric-active');
+    }, 200);
   } catch (err) {
+    stageTimers.forEach(clearTimeout);
     state.hsmConnected    = false;
     state.hsmConnecting   = false;
+    state.hsmConnectStage = 0;
     state.hsmConnectError = err.message || 'Connection failed';
     rebuildCeremony();
   }
 }
 
 function attachConnectHandlers(root) {
+  // Demo mode button
+  const demoBtn = root.querySelector('#demo-mode-btn');
+  if (demoBtn) {
+    demoBtn.addEventListener('click', activateDemoMode);
+  }
+
   root.querySelectorAll('.cer-vendor-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const key = btn.dataset.preset;
@@ -1069,7 +1298,8 @@ function attachShareHandlers(root) {
       ackBtn.textContent = 'Recording…';
 
       try {
-        await api.acknowledgeShare(state.currentShareIndex);
+        if (!state.demoMode) await api.acknowledgeShare(state.currentShareIndex);
+        else await _sleep(200);
         state.sharesAcknowledged++;
         state.currentShareIndex++;
         state.currentShare = null;
@@ -1131,7 +1361,9 @@ function attachReconstructHandlers(root) {
     rebuildCeremony();
 
     try {
-      const result = await api.reconstructAndSeal(shares);
+      const result = state.demoMode
+        ? await demoReconstructAndSeal()
+        : await api.reconstructAndSeal(shares);
       state.masterKeyId    = result.masterKeyId;
       state.publicKeyHex   = result.publicKeyHex;
       state.chainCodeHex   = result.chainCodeHex;
@@ -1178,6 +1410,123 @@ function updatePathPreview() {
   const first = [...state.selectedCoins][0];
   const coin = BIP44_COINS.find(c => c.symbol === first);
   if (coin) preview.textContent = `m / 44' / ${coin.type} / 0' / 0 / 0`;
+}
+
+// ─── Demo mode activation ─────────────────────────────────────────────────────
+
+async function activateDemoMode() {
+  state.demoMode = true;
+
+  // Animate the HSM connect stages without real API
+  state.hsmConnecting   = true;
+  state.hsmConnected    = false;
+  state.hsmConnectError = null;
+  state.hsmConnectStage = 0;
+  rebuildCeremony();
+
+  const delay = 350;
+  for (let i = 1; i <= 4; i++) {
+    await _sleep(delay);
+    state.hsmConnectStage = i;
+    // Patch the checklist in-place
+    const root = document.querySelector('.cer-root');
+    if (root) {
+      const tmp = document.createElement('div');
+      tmp.innerHTML = renderConnect();
+      const existing = root.querySelector('.cer-connect');
+      if (existing) existing.replaceWith(tmp.firstElementChild);
+    }
+  }
+
+  await _sleep(delay);
+  state.hsmConnecting = false;
+  state.hsmConnected  = true;
+  state.hsmProvider   = 'Demo (SoftHSM2)';
+  state.hsmTokenLabel = 'demo-partition';
+  rebuildCeremony();
+
+  // Celebrate
+  setTimeout(fireConfetti, 120);
+  setTimeout(() => {
+    const ring = document.getElementById('electric-ring');
+    if (ring) ring.classList.add('cer-electric-active');
+  }, 250);
+}
+
+// ─── Demo entropy (runs instead of real HSM) ──────────────────────────────────
+
+async function startDemoEntropy() {
+  state.entropyDone  = false;
+  state.entropyError = null;
+  state.logLines     = [];
+
+  const arc    = () => document.getElementById('entropy-arc');
+  const pct    = () => document.getElementById('entropy-pct');
+  const lines  = () => document.getElementById('entropy-lines');
+  const nextBtn = () => document.getElementById('cer-next');
+
+  let progress = 0;
+  state.entropyInterval = setInterval(() => {
+    progress = Math.min(progress + Math.random() * 3 + 0.5, 90);
+    const el = arc(); const pe = pct();
+    if (el) el.style.strokeDashoffset = 326.7 * (1 - progress / 100);
+    if (pe) pe.textContent = Math.round(progress) + '%';
+
+    const linesEl = lines();
+    if (linesEl) {
+      const hex = Array.from({ length: 16 }, () =>
+        Math.floor(Math.random() * 256).toString(16).padStart(2, '0')
+      ).join(' ');
+      const line = document.createElement('div');
+      line.className = 'cer-log-line';
+      line.textContent = hex;
+      if (linesEl.children.length >= 8) linesEl.removeChild(linesEl.firstChild);
+      linesEl.appendChild(line);
+    }
+  }, 80);
+
+  await _sleep(1600);
+  clearInterval(state.entropyInterval);
+
+  const result = await demoGenerateEntropy();
+  state.entropyHex = result.entropyHex;
+  state.entropyDone = true;
+
+  state.logLines = [
+    { label: 'bytes 01–16', value: result.entropyHex.slice(0, 32) },
+    { label: 'bytes 17–32', value: result.entropyHex.slice(32, 64) },
+  ];
+
+  const arcEl = arc();
+  if (arcEl) { arcEl.style.transition = 'stroke-dashoffset 0.3s ease,stroke 0.3s ease'; arcEl.style.strokeDashoffset = '0'; arcEl.style.stroke = '#22C55E'; }
+  const pctEl = pct();
+  if (pctEl) { pctEl.textContent = '100%'; pctEl.style.color = 'var(--emerald)'; }
+
+  const linesEl = lines();
+  if (linesEl) {
+    linesEl.innerHTML = '';
+    state.logLines.forEach(({ label, value }) => {
+      const line = document.createElement('div');
+      line.className = 'cer-log-line cer-log-line-labeled';
+      line.innerHTML = `<span class="cer-log-byte-range">${label}</span><span>${value}</span>`;
+      linesEl.appendChild(line);
+    });
+  }
+
+  const logHeader = document.querySelector('.cer-log-header');
+  if (logHeader) {
+    logHeader.innerHTML = `<span class="cer-log-dot" style="background:var(--emerald)"></span>
+      C_GenerateRandom · DEMO · ${result.sharesGenerated} shares generated`;
+  }
+
+  const nb = nextBtn();
+  if (nb) nb.disabled = false;
+
+  setTimeout(() => {
+    state.currentShareIndex  = 0;
+    state.sharesAcknowledged = 0;
+    transition('next');
+  }, 1500);
 }
 
 export function initCeremony() {

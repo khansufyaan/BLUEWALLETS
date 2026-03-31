@@ -111,4 +111,8 @@ export const api = {
   getHsmStatus:     () => request('/hsm/status'),
   connectHsm:       (params) => request('/hsm/connect', { method: 'POST', body: JSON.stringify(params) }),
   disconnectHsm:    () => request('/hsm/disconnect', { method: 'POST' }),
+
+  // Health — service controls & logs (auth-protected)
+  getServiceLogs:   (service) => request(`/health/logs?service=${encodeURIComponent(service)}`),
+  restartService:   (service) => request(`/health/services/${encodeURIComponent(service)}/restart`, { method: 'POST' }),
 };

@@ -85,7 +85,8 @@ async function main() {
   app.use(cors());
   app.use(express.json());
 
-  // Health route (no auth required)
+  // Health route (public: /health — just the GET /)
+  // Additional health sub-routes (logs, restart) live under /api/v1/health (authenticated)
   app.use('/health', createHealthRoutes(hsmSession));
 
   // Auth routes (no auth required — these ARE the auth endpoints)
@@ -102,6 +103,7 @@ async function main() {
   apiRouter.use('/dashboard', createDashboardRoutes(walletService, vaultService, policyEngine, rbacService, transactionStore));
   apiRouter.use('/ceremony', createCeremonyRoutes(ceremonyService, ceremonyApprovalService, authService));
   apiRouter.use('/hsm', createHsmConfigRoutes(hsmConfigService));
+  apiRouter.use('/health', createHealthRoutes(hsmSession)); // auth-protected sub-routes (logs, restart)
   app.use('/api/v1', apiRouter);
 
   // Serve UI console

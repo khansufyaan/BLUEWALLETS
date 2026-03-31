@@ -1,0 +1,95 @@
+# WaaS KMS — Luna Cloud HSM (DPoD) Production Image
+# Must build for linux/amd64 — Luna client binaries are x86_64 Linux ELF
+FROM --platform=linux/amd64 node:22-bookworm AS builder
+
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm ci
+COPY tsconfig.json ./
+COPY src/ ./src/
+RUN npm run build
+
+# Production image with Luna Client
+FROM --platform=linux/amd64 node:22-bookworm-slim
+
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      ca-certificates curl python3 make g++ && \
+    rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev
+
+COPY --from=builder /app/dist ./dist
+COPY public/ ./public/
+COPY scripts/ ./scripts/
+
+# Install Luna Client
+WORKDIR /opt/lunaclient
+COPY luna-client/cvclient-min.tar ./
+RUN tar xf cvclient-min.tar && rm cvclient-min.tar && mkdir -p lock
+
+COPY luna-client/Chrystoki.conf ./Chrystoki.conf
+COPY luna-client/partition-ca-certificate.pem ./partition-ca-certificate.pem
+COPY luna-client/partition-certificate.pem ./partition-certificate.pem
+COPY luna-client/server-certificate.pem ./server-certificate.pem
+
+# Run setenv to fix absolute paths in Chrystoki.conf
+RUN bash -c 'source setenv 2>/dev/null || true'
+
+ENV ChrystokiConfigurationPath=/opt/lunaclient
+ENV HSM_USE_SOFTHSM=false
+ENV HSM_PKCS11_LIB=/opt/lunaclient/libs/64/libCryptoki2.so
+ENV HSM_SLOT_INDEX=0
+ENV HSM_LABEL=waas-dpod
+ENV PORT=3100
+ENV NODE_ENV=production
+ENV LOG_LEVEL=debug
+
+WORKDIR /app
+
+# Entrypoint: init user PIN if needed, then start server.
+# NOTE: ChrystokiConfigurationPath is already set via ENV above.
+# We do NOT re-run `source setenv` at runtime — it rewrites Chrystoki.conf
+# absolute paths and can break the already-configured connection.
+COPY <<'ENTRYPOINT' /app/entrypoint.sh
+#!/bin/bash
+set -e
+# ChrystokiConfigurationPath is set in the Dockerfile ENV — no need to source setenv again.
+cd /app
+
+# Initialize user PIN if not done yet
+node -e "
+const pkcs11js = require('pkcs11js');
+const p = new pkcs11js.PKCS11();
+p.load('$HSM_PKCS11_LIB');
+p.C_Initialize();
+const slots = p.C_GetSlotList(true);
+if (slots.length > 0) {
+  const tok = p.C_GetTokenInfo(slots[0]);
+  const sess = p.C_OpenSession(slots[0], 6);
+  try {
+    p.C_Login(sess, 1, process.env.HSM_PIN);
+    console.log('User PIN already set');
+    p.C_Logout(sess);
+  } catch(e) {
+    if (e.message.includes('NOT_INITIALIZED')) {
+      console.log('Setting user PIN...');
+      p.C_Login(sess, 0, process.env.HSM_PIN);
+      p.C_InitPIN(sess, process.env.HSM_PIN);
+      p.C_Logout(sess);
+      console.log('User PIN initialized');
+    }
+  }
+  p.C_CloseSession(sess);
+}
+p.C_Finalize();
+" 2>/dev/null || true
+
+exec node dist/index.js
+ENTRYPOINT
+RUN chmod +x /app/entrypoint.sh
+
+EXPOSE 3100
+CMD ["/app/entrypoint.sh"]

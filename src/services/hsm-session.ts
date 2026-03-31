@@ -1,0 +1,171 @@
+import pkcs11js from 'pkcs11js';
+import { HsmConfig, HsmStatus } from '../types';
+import { logger } from '../utils/logger';
+
+/**
+ * Manages the PKCS#11 session lifecycle with the Luna Cloud HSM.
+ * Handles initialization, login, session management, and cleanup.
+ */
+export class HsmSession {
+  private pkcs11: pkcs11js.PKCS11;
+  private session: pkcs11js.Handle | null = null;
+  private slotId: pkcs11js.Handle | null = null;
+  private initialized = false;
+  private loggedIn = false;
+
+  constructor(private config: HsmConfig) {
+    this.pkcs11 = new pkcs11js.PKCS11();
+  }
+
+  /**
+   * Swap the active config and re-initialize the PKCS#11 session.
+   * Used when the user configures the HSM dynamically via the UI.
+   * The caller is responsible for calling cleanup() first.
+   */
+  async reinitialize(newConfig: HsmConfig): Promise<void> {
+    this.config = newConfig;
+    // Reset state flags so initialize() runs cleanly
+    this.session = null;
+    this.slotId = null;
+    this.initialized = false;
+    this.loggedIn = false;
+    // Create a fresh PKCS11 object (the old one may be finalized)
+    this.pkcs11 = new pkcs11js.PKCS11();
+    await this.initialize();
+  }
+
+  /**
+   * Initialize the PKCS#11 library and open a session.
+   */
+  async initialize(): Promise<void> {
+    try {
+      logger.info('Loading PKCS#11 library', { library: this.config.pkcs11Library });
+      this.pkcs11.load(this.config.pkcs11Library);
+
+      this.pkcs11.C_Initialize();
+      this.initialized = true;
+      logger.info('PKCS#11 library initialized');
+
+      // Get the target slot
+      const slots = this.pkcs11.C_GetSlotList(true); // true = only slots with tokens
+      if (slots.length === 0) {
+        throw new Error('No HSM slots with tokens found');
+      }
+
+      if (this.config.slotIndex >= slots.length) {
+        throw new Error(
+          `Slot index ${this.config.slotIndex} out of range (${slots.length} slots available)`
+        );
+      }
+
+      this.slotId = slots[this.config.slotIndex];
+      logger.info('Selected HSM slot', { slotIndex: this.config.slotIndex });
+
+      // Open a read/write session
+      this.session = this.pkcs11.C_OpenSession(
+        this.slotId,
+        pkcs11js.CKF_SERIAL_SESSION | pkcs11js.CKF_RW_SESSION
+      );
+      logger.info('PKCS#11 session opened');
+
+      // Login to the token
+      this.pkcs11.C_Login(this.session, pkcs11js.CKU_USER, this.config.pin);
+      this.loggedIn = true;
+      logger.info('Logged into HSM partition');
+    } catch (error) {
+      logger.error('Failed to initialize HSM session', { error });
+      await this.cleanup();
+      throw error;
+    }
+  }
+
+  /**
+   * Returns the active PKCS#11 session handle.
+   */
+  getSession(): pkcs11js.Handle {
+    if (!this.session) {
+      throw new Error('HSM session not initialized. Call initialize() first.');
+    }
+    return this.session;
+  }
+
+  /**
+   * Returns the raw PKCS#11 interface.
+   */
+  getPkcs11(): pkcs11js.PKCS11 {
+    return this.pkcs11;
+  }
+
+  /**
+   * Get HSM status and slot/token info.
+   */
+  getStatus(): HsmStatus {
+    if (!this.initialized || !this.slotId) {
+      return { connected: false, slotInfo: null, tokenInfo: null };
+    }
+
+    try {
+      const slotInfo = this.pkcs11.C_GetSlotInfo(this.slotId);
+      const tokenInfo = this.pkcs11.C_GetTokenInfo(this.slotId);
+
+      return {
+        connected: this.loggedIn,
+        slotInfo: {
+          slotDescription: slotInfo.slotDescription.trim(),
+          manufacturerId: slotInfo.manufacturerID.trim(),
+          firmwareVersion: `${slotInfo.firmwareVersion.major}.${slotInfo.firmwareVersion.minor}`,
+          tokenPresent: !!(slotInfo.flags & 0x00000001), // CKF_TOKEN_PRESENT = 0x01
+        },
+        tokenInfo: {
+          label: tokenInfo.label.trim(),
+          model: tokenInfo.model.trim(),
+          serialNumber: tokenInfo.serialNumber.trim(),
+          freePublicMemory: Number(tokenInfo.freePublicMemory),
+          freePrivateMemory: Number(tokenInfo.freePrivateMemory),
+        },
+      };
+    } catch (error) {
+      logger.error('Failed to get HSM status', { error });
+      return { connected: false, slotInfo: null, tokenInfo: null };
+    }
+  }
+
+  /**
+   * Clean up: logout, close session, finalize.
+   */
+  async cleanup(): Promise<void> {
+    try {
+      if (this.loggedIn && this.session) {
+        this.pkcs11.C_Logout(this.session);
+        this.loggedIn = false;
+        logger.info('Logged out of HSM');
+      }
+    } catch {
+      // Ignore logout errors during cleanup
+    }
+
+    try {
+      if (this.session) {
+        this.pkcs11.C_CloseSession(this.session);
+        this.session = null;
+        logger.info('PKCS#11 session closed');
+      }
+    } catch {
+      // Ignore close errors
+    }
+
+    try {
+      if (this.initialized) {
+        this.pkcs11.C_Finalize();
+        this.initialized = false;
+        logger.info('PKCS#11 finalized');
+      }
+    } catch {
+      // Ignore finalize errors
+    }
+  }
+
+  isConnected(): boolean {
+    return this.loggedIn && this.session !== null;
+  }
+}

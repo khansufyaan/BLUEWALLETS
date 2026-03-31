@@ -1,0 +1,41 @@
+version: '3.8'
+
+services:
+  waas-kms:
+    build: .
+    ports:
+      - "3100:3100"
+    environment:
+      - HSM_USE_SOFTHSM=true
+      - SOFTHSM_LIB=/usr/lib/softhsm/libsofthsm2.so
+      - SOFTHSM2_CONF=/etc/softhsm2.conf
+      - HSM_SLOT_INDEX=0
+      - HSM_PIN=1234
+      - HSM_LABEL=waas-dev
+      - PORT=3100
+      - NODE_ENV=development
+      - LOG_LEVEL=debug
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3100/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # For production with Luna Cloud HSM, use this instead:
+  # waas-kms-luna:
+  #   build: .
+  #   ports:
+  #     - "3100:3100"
+  #   volumes:
+  #     # Mount the Luna Client installation
+  #     - /usr/safenet/lunaclient:/usr/safenet/lunaclient:ro
+  #     # Mount DPoD certificates
+  #     - ./certs:/app/certs:ro
+  #   environment:
+  #     - HSM_USE_SOFTHSM=false
+  #     - HSM_PKCS11_LIB=/usr/safenet/lunaclient/lib/libCryptoki2_64.so
+  #     - HSM_SLOT_INDEX=0
+  #     - HSM_PIN=${HSM_PIN}
+  #     - HSM_LABEL=waas-production
+  #     - PORT=3100
+  #     - NODE_ENV=production

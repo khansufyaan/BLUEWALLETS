@@ -1,0 +1,19 @@
+node_modules/
+dist/
+.env
+.env.luna
+*.pem
+*.key
+*.crt
+*.p12
+.DS_Store
+
+# Luna client — customer-specific credentials and binaries; MUST NOT be committed
+luna-client/
+luna-client/cvclient-min.tar
+luna-client/cvclient-min.zip
+luna-client/*.pem
+luna-client/Chrystoki.conf
+luna-client/lch-support-*
+
+*.log

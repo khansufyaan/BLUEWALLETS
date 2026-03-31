@@ -1,0 +1,23 @@
+version: '3.8'
+
+services:
+  waas-luna:
+    build:
+      context: .
+      dockerfile: Dockerfile.luna
+    platform: linux/amd64
+    ports:
+      - "3100:3100"
+    environment:
+      - PORT=3100
+      - NODE_ENV=production
+      - LOG_LEVEL=debug
+      # HSM is configured at runtime via the ceremony wizard UI.
+      # DO NOT set HSM_PKCS11_LIB / HSM_PIN here — the user enters them
+      # in the "Connect HSM" step at http://waas-luna.orb.local:3100/#/ceremony
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3100/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s

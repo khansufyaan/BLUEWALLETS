@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blue Wallets</title>
+  <link rel="stylesheet" href="/css/styles.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='url(%23g)'/><defs><linearGradient id='g' x1='0' y1='0' x2='32' y2='32'><stop stop-color='%232563EB'/><stop offset='1' stop-color='%237C3AED'/></linearGradient></defs><text x='7' y='23' font-size='18' fill='white' font-family='system-ui' font-weight='700'>B</text></svg>">
+</head>
+<body>
+  <!-- Login (shown when not authenticated) -->
+  <div id="login-container"></div>
+
+  <!-- App Shell (shown when authenticated) -->
+  <div id="app-shell" class="app-layout hidden">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <img src="/img/logo.png" alt="Blue" style="width:32px;height:32px;border-radius:8px">
+        <span class="logo-text">Blue Wallets</span>
+      </div>
+
+      <nav class="sidebar-nav">
+        <div class="nav-section">Overview</div>
+        <a href="#/" class="nav-item" data-page="dashboard">
+          <svg class="nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="2" width="6" height="6" rx="1"/><rect x="10" y="2" width="6" height="6" rx="1"/><rect x="2" y="10" width="6" height="6" rx="1"/><rect x="10" y="10" width="6" height="6" rx="1"/></svg>
+          Dashboard
+        </a>
+
+        <div class="nav-section">Assets</div>
+        <a href="#/vaults" class="nav-item" data-page="vaults">
+          <svg class="nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="2" y="4" width="14" height="11" rx="2"/><path d="M6 4V3a3 3 0 016 0v1"/><circle cx="9" cy="10" r="1.5"/></svg>
+          Vaults
+        </a>
+        <a href="#/wallets" class="nav-item" data-page="wallets">
+          <svg class="nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="1" y="4" width="16" height="11" rx="2"/><path d="M13 9.5a1 1 0 100 2 1 1 0 000-2z" fill="currentColor"/><path d="M1 7h16"/></svg>
+          Wallets
+        </a>
+
+        <div class="nav-section">Governance</div>
+        <a href="#/policies" class="nav-item" data-page="policies">
+          <svg class="nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 2l6 3v4c0 3.5-2.5 6.5-6 7.5C5.5 15.5 3 12.5 3 9V5l6-3z"/><path d="M6.5 9l2 2 3.5-3.5"/></svg>
+          Policies
+        </a>
+        <a href="#/roles" class="nav-item" data-page="roles">
+          <svg class="nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="9" cy="6" r="3"/><path d="M3 16c0-3.3 2.7-6 6-6s6 2.7 6 6"/></svg>
+          Roles
+        </a>
+        <a href="#/permissions" class="nav-item" data-page="permissions">
+          <svg class="nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M7 2h4v3H7z"/><path d="M3 7h12v9H3z" rx="1"/><path d="M7 10h4m-2-2v4"/></svg>
+          Permissions
+        </a>
+        <div class="nav-section">Developer</div>
+        <a href="/api-docs.html" class="nav-item nav-item-external" target="_blank">
+          <svg class="nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M4 2h10a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V4a2 2 0 012-2z"/><path d="M6 6h6M6 9h6M6 12h3"/></svg>
+          API Reference
+          <svg class="nav-external-icon" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 1h6v6M9 1L4 6"/></svg>
+        </a>
+        <a href="/whitepaper.html" class="nav-item nav-item-external" target="_blank">
+          <svg class="nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M5 2h8l3 3v11a1 1 0 01-1 1H5a1 1 0 01-1-1V3a1 1 0 011-1z"/><path d="M12 2v4h4"/><path d="M7 9h6M7 12h4"/></svg>
+          Whitepaper
+          <svg class="nav-external-icon" width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M3 1h6v6M9 1L4 6"/></svg>
+        </a>
+
+        <div class="nav-section">System</div>
+        <a href="#/ceremony" class="nav-item" data-page="ceremony">
+          <svg class="nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9 2l6 3v4c0 3.5-2.5 6.5-6 7.5C5.5 15.5 3 12.5 3 9V5l6-3z"/><circle cx="9" cy="9" r="1.5" fill="currentColor"/></svg>
+          Key Ceremony
+        </a>
+        <a href="#/health" class="nav-item" data-page="health">
+          <svg class="nav-icon" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M2 9h3l2-5 2 10 2-5h5"/></svg>
+          Health
+        </a>
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="hsm-status" id="hsm-status">
+          <div class="hsm-dot"></div>
+          <div>
+            <div class="hsm-status-text">Luna HSM Connected</div>
+            <div class="hsm-status-detail">FIPS 140-3 Level 3</div>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Main -->
+    <main class="main-content">
+      <header class="topbar">
+        <div class="topbar-title" id="page-title">Dashboard</div>
+        <div class="topbar-actions">
+          <div class="user-menu" id="user-menu">
+            <div class="user-avatar">A</div>
+            <span>Admin</span>
+          </div>
+          <button class="btn btn-ghost btn-sm" id="logout-btn">Logout</button>
+        </div>
+      </header>
+      <div id="page-content"></div>
+    </main>
+  </div>
+
+  <script type="module" src="/js/app.js"></script>
+</body>
+</html>

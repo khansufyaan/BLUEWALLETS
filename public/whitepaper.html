@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Blue Wallets — Technical Whitepaper</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='6' fill='url(%23g)'/><defs><linearGradient id='g' x1='0' y1='0' x2='32' y2='32'><stop stop-color='%232563EB'/><stop offset='1' stop-color='%237C3AED'/></linearGradient></defs><text x='7' y='23' font-size='18' fill='white' font-family='system-ui' font-weight='700'>B</text></svg>">
+  <link rel="stylesheet" href="/css/whitepaper.css">
+</head>
+<body>
+
+  <header class="wp-nav-bar">
+    <div class="wp-nav-inner">
+      <a href="/whitepaper.html" class="wp-nav-brand">Blue Wallets</a>
+      <nav class="wp-nav-links" id="wp-nav">
+        <a href="#index" class="wp-nav-link active" data-section="index">Index</a>
+        <a href="#principles" class="wp-nav-link" data-section="principles">Principles</a>
+        <a href="#architecture" class="wp-nav-link" data-section="architecture">Architecture</a>
+        <a href="#security" class="wp-nav-link" data-section="security">Security</a>
+        <a href="#operations" class="wp-nav-link" data-section="operations">Operations</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="wp-main">
+    <article class="wp-article">
+
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <!-- INDEX                                                      -->
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <section class="wp-section" id="index">
+
+        <h1>FIPS-Compliant Key Management for Regulated Financial Institutions</h1>
+        <p class="wp-byline">Blue Wallets Team &mdash; <span id="wp-date"></span></p>
+
+        <p>Regulated financial institutions face a fundamental tension when managing digital assets. Existing solutions &mdash; MPC wallets, smart contract wallets, and cloud-hosted key management services &mdash; compromise on security by distributing or storing key material in cloud environments without FIPS or NIST certification. For banks operating under strict regulatory frameworks, this is unacceptable.</p>
+
+        <p>Blue Wallets is built for institutions that refuse to compromise. The platform is a white-label Wallet-as-a-Service (WaaS) solution deployed entirely <strong>on-premises</strong>, within the bank's own secure network. All cryptographic key material is generated and managed inside FIPS 140-3 Level 3 certified Hardware Security Modules &mdash; specifically, Thales Luna HSMs. The software, the portal, the API, and every microservice run on the institution's own infrastructure. Nothing leaves the building.</p>
+
+        <p>The platform implements BIP-32, BIP-39, and BIP-44 key ceremonies to derive hierarchical deterministic wallet structures inside the HSM. Child keys are wrapped (encrypted by the HSM) and stored externally in a database, enabling the platform to scale to millions of wallets without being constrained by HSM key slot limitations. When a transaction requires signing, the wrapped child key is retrieved from the database, unwrapped inside the HSM, used to sign, and the result is returned &mdash; the plaintext child key never exists outside the HSM boundary.</p>
+
+        <h2>Structure of this whitepaper</h2>
+
+        <p><a href="#principles"><strong>Principles</strong></a> &mdash; Why on-premises HSM-based custody is the only architecture that satisfies regulatory requirements for digital asset management. How Blue Wallets differs from MPC and smart contract wallet approaches. The five design principles that govern every architectural decision.</p>
+
+        <p><a href="#architecture"><strong>Architecture</strong></a> &mdash; The on-premises deployment model. The BIP-32/39/44 key ceremony design and the wrapped child key pattern that enables unlimited wallet scalability. The PKCS#11 interface layer, core microservices, and the portal and API that financial institutions white-label for their own clients.</p>
+
+        <p><a href="#security"><strong>Security</strong></a> &mdash; Defense-in-depth security model within the bank's network perimeter. The transaction signing lifecycle showing how wrapped keys flow through the HSM. Policy engine enforcement as a pre-signing gate. Compliance and audit trail architecture.</p>
+
+        <p><a href="#operations"><strong>Operations</strong></a> &mdash; Chain support matrix covering 9 blockchain networks. The composable policy framework. On-premises deployment topology and HSM cluster configuration.</p>
+
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <!-- PRINCIPLES                                                  -->
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <section class="wp-section" id="principles">
+
+        <h1>Design Principles</h1>
+        <p class="wp-byline">Blue Wallets Team &mdash; <span class="wp-date-auto"></span></p>
+
+        <h2>The Problem with Existing Solutions</h2>
+
+        <p>The digital asset custody market offers three dominant approaches, none of which satisfy the security requirements of regulated financial institutions.</p>
+
+        <p><strong>MPC (Multi-Party Computation) wallets</strong> distribute key shares across multiple cloud servers. While no single server holds the complete key, the shares are recombined in memory during signing operations &mdash; creating a window where the full private key exists in volatile memory on cloud infrastructure. MPC implementations are not FIPS certified, and the cryptographic proofs underlying threshold signature schemes have not undergone the same decades of scrutiny as traditional ECDSA.<sup><a href="#fn1" id="ref1">1</a></sup></p>
+
+        <p><strong>Smart contract wallets</strong> implement access control at the blockchain protocol layer using multisig or account abstraction. While they eliminate the single-key-holder problem, they introduce smart contract risk &mdash; bugs in the contract logic can result in permanent loss of funds. Smart contract wallets are also chain-specific; there is no unified smart contract wallet standard across Bitcoin, Ethereum, and Solana.</p>
+
+        <p><strong>Cloud-hosted KMS solutions</strong> (AWS CloudHSM, Azure Dedicated HSM) provide FIPS-certified hardware, but the institution does not control the physical infrastructure. For banks operating under regulations that mandate full custody of cryptographic material, a cloud provider's attestation is not equivalent to physical possession of the HSM in a bank-controlled data center.</p>
+
+        <p>Blue Wallets takes a different approach. The entire platform &mdash; software, keys, and infrastructure &mdash; runs on-premises, inside the institution's secure network, using HSMs that the institution physically owns and controls.</p>
+
+        <h2>1. On-Premises, Not Cloud</h2>
+
+        <p>Every component of the Blue Wallets platform is deployed within the financial institution's own infrastructure. The portal, the API gateway, the core microservices, and the database all run on servers inside the bank's network perimeter. The Luna HSM sits in the bank's data center, connected via a private network interface. No transaction data, no key material, and no customer information ever traverses the public internet.</p>
+
+        <p>This is not a hybrid model. There is no cloud fallback, no external dependency for signing operations, and no third-party service that can be subpoenaed for key material. The institution has complete sovereignty over the entire custody stack.</p>
+
+        <h2>2. HSM-First Security</h2>
+
+        <p>All cryptographic operations &mdash; master key generation, child key derivation, key wrapping, and transaction signing &mdash; happen exclusively inside the FIPS 140-3 Level 3 certified HSM. The application layer never sees plaintext private key material. It only handles wrapped (encrypted) keys, public keys, and signatures.</p>
+
+        <p>The HSM is a physically tamper-resistant device with its own processor, memory, and cryptographic accelerator. Keys created inside the HSM are marked with <code>CKA_EXTRACTABLE = false</code> at the PKCS#11 level. No API call, no administrative command, and no firmware update can extract the master key. Attempting to physically tamper with the device destroys all key material.<sup><a href="#fn2" id="ref2">2</a></sup></p>
+
+        <h2>3. BIP Standards for Scalability</h2>
+
+        <p>The platform implements BIP-32 (hierarchical deterministic wallets), BIP-39 (mnemonic seed phrases), and BIP-44 (multi-account hierarchy) as key ceremonies executed inside the HSM. This solves a fundamental constraint: HSMs have a finite number of key slots (typically 2,000&ndash;100,000 depending on the model). A platform serving millions of wallets cannot store each wallet's private key as a separate HSM object.</p>
+
+        <p>Instead, the master key is generated and permanently stored in the HSM. Child keys are derived from the master key using BIP-32 derivation paths, wrapped (encrypted) by the HSM, and stored in an external database. The wrapped child keys are cryptographically useless without the HSM &mdash; they cannot be unwrapped, used for signing, or decrypted by any system outside the HSM boundary.</p>
+
+        <h2>4. Policy Before Signing</h2>
+
+        <p>Every transaction is evaluated against configurable policy rules <em>before</em> the HSM is invoked for signing. This is a hard architectural boundary: the signing service will not accept a request that has not passed through the policy engine. Spending limits, velocity controls, whitelists, time windows, and multi-level approval thresholds are enforced at the service layer, creating a programmable governance framework that each institution configures for their own compliance requirements.</p>
+
+        <h2>5. Immutable Audit Trail</h2>
+
+        <p>Every transaction &mdash; completed or rejected &mdash; records the HSM signature, the signed payload, all policy evaluation results, and any failure reasons. Rejected transactions are equally important for compliance: when a policy rule blocks a transfer, the rejection is recorded with the specific rule type and evaluation parameters. This enables compliance teams to demonstrate to regulators that controls are actively enforced, not merely configured.</p>
+
+        <div class="wp-footnotes">
+          <p id="fn1"><sup>1</sup> Threshold ECDSA schemes (GG18, GG20, CGGMP) rely on interactive protocols between key share holders. While academically rigorous, they have not been evaluated under NIST's Cryptographic Module Validation Program (CMVP). <a href="#ref1">&uarr;</a></p>
+          <p id="fn2"><sup>2</sup> FIPS 140-3 Level 3 mandates physical tamper-evidence and tamper-response mechanisms. Luna HSMs implement zeroization of all key material upon detection of physical intrusion. <a href="#ref2">&uarr;</a></p>
+        </div>
+
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <!-- ARCHITECTURE                                                -->
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <section class="wp-section" id="architecture">
+
+        <h1>Platform Architecture</h1>
+        <p class="wp-byline">Blue Wallets Team &mdash; <span class="wp-date-auto"></span></p>
+
+        <p>The entire platform runs on-premises within the financial institution's secure network. There are no external dependencies for any cryptographic operation. The architecture consists of four layers, each with distinct security boundaries. All inter-layer communication occurs over the bank's private network.</p>
+
+        <!-- Architecture Diagram -->
+        <figure class="wp-figure">
+          <div class="wp-diagram">
+            <div class="wp-diagram-label-bar">Bank's Secure Network</div>
+            <div class="wp-diagram-row">
+              <div class="wp-diagram-layer wp-diagram-layer-1">
+                <span class="wp-diagram-label">Layer 1</span>
+                <strong>White-Label Portal &amp; API</strong>
+                <span>Bank-branded UI &middot; REST API &middot; Client SDKs</span>
+              </div>
+            </div>
+            <div class="wp-diagram-arrow">&darr;</div>
+            <div class="wp-diagram-row">
+              <div class="wp-diagram-layer wp-diagram-layer-2">
+                <span class="wp-diagram-label">Layer 2</span>
+                <strong>API Gateway</strong>
+                <span>Auth &middot; Rate Limiting &middot; Validation &middot; Routing</span>
+              </div>
+            </div>
+            <div class="wp-diagram-arrow">&darr;</div>
+            <div class="wp-diagram-row wp-diagram-row-services">
+              <div class="wp-diagram-service">
+                <span class="wp-diagram-label">Layer 3</span>
+                <strong>Key Svc</strong>
+              </div>
+              <div class="wp-diagram-service">
+                <strong>Wallet Svc</strong>
+              </div>
+              <div class="wp-diagram-service">
+                <strong>Signing Svc</strong>
+              </div>
+              <div class="wp-diagram-service">
+                <strong>Policy Engine</strong>
+              </div>
+            </div>
+            <div class="wp-diagram-arrow">PKCS#11 &darr;</div>
+            <div class="wp-diagram-row wp-diagram-row-infra">
+              <div class="wp-diagram-infra wp-diagram-hsm">
+                <span class="wp-diagram-label">Layer 4</span>
+                <strong>Luna HSM</strong>
+                <span>FIPS 140-3 Level 3 &middot; On-Prem</span>
+              </div>
+              <div class="wp-diagram-infra">
+                <strong>Database</strong>
+                <span>Wrapped Keys &middot; Metadata</span>
+              </div>
+            </div>
+          </div>
+          <figcaption>Figure 1: On-premises deployment architecture. All components run inside the bank's secure network. The Luna HSM is the only component with access to plaintext key material. Core services communicate with the HSM via PKCS#11.</figcaption>
+        </figure>
+
+        <h2>White-Label Portal and API</h2>
+
+        <p>The institution receives a fully branded portal and API that they deploy for their own clients. The portal provides a web-based interface for vault management, wallet creation, transaction initiation, policy configuration, and role-based access control. The API provides the same functionality programmatically for institutions that integrate Blue Wallets into their existing systems.</p>
+
+        <p>Both the portal and API run on the institution's servers. The branding, domain, and authentication are fully controlled by the institution. End users interact with the bank's brand &mdash; Blue Wallets is invisible to the end customer.</p>
+
+        <h2>Core Microservices</h2>
+
+        <p>Four core services run as independent processes on the bank's server infrastructure, communicating through internal interfaces within the private network.</p>
+
+        <p><strong>Key Service</strong> manages the BIP-32/39/44 key ceremony. It orchestrates master key generation inside the HSM, child key derivation, key wrapping, and the storage of wrapped keys in the database. It also handles key rotation and the extraction of public keys for address derivation. The Key Service is the only service that issues PKCS#11 commands to the HSM for key operations.</p>
+
+        <p><strong>Wallet Service</strong> derives blockchain addresses from public keys across 9 supported chains. It manages vault-based wallet organization, balance tracking, and transfer execution. The Wallet Service never touches private key material &mdash; it works exclusively with public keys and wallet metadata.</p>
+
+        <p><strong>Signing Service</strong> handles the transaction signing workflow. When a transfer is approved, the Signing Service retrieves the wrapped child key from the database, sends it to the HSM for unwrapping and signing via PKCS#11, and returns the signed transaction. The plaintext child key exists only inside the HSM for the duration of the signing operation.</p>
+
+        <p><strong>Policy Engine</strong> evaluates all governance rules before any signing request reaches the HSM. Spending limits, velocity controls, whitelists, blacklists, time windows, and multi-level approval thresholds are enforced here. The Policy Engine has veto power &mdash; if any rule fails, the Signing Service is never invoked.</p>
+
+        <h2>The BIP-32/39/44 Key Ceremony</h2>
+
+        <p>The key ceremony is the core innovation that enables Blue Wallets to scale to millions of wallets on a single HSM. It works as follows:</p>
+
+        <figure class="wp-figure">
+          <div class="wp-diagram">
+            <div class="wp-diagram-row wp-diagram-row-ceremony">
+              <div class="wp-diagram-ceremony-step">
+                <div class="wp-flow-num">1</div>
+                <div>
+                  <strong>Master Key Generation</strong>
+                  <span>BIP-39 mnemonic &rarr; BIP-32 master key generated <em>inside HSM</em>. Marked CKA_EXTRACTABLE=false. Never leaves.</span>
+                </div>
+              </div>
+              <div class="wp-diagram-ceremony-step">
+                <div class="wp-flow-num">2</div>
+                <div>
+                  <strong>Child Key Derivation</strong>
+                  <span>BIP-44 path (m/44'/coin'/account'/change/index) derived inside HSM from master key.</span>
+                </div>
+              </div>
+              <div class="wp-diagram-ceremony-step">
+                <div class="wp-flow-num">3</div>
+                <div>
+                  <strong>Key Wrapping</strong>
+                  <span>Child key encrypted (wrapped) by HSM using a wrapping key. Wrapped key blob exported and stored in database.</span>
+                </div>
+              </div>
+              <div class="wp-diagram-ceremony-step">
+                <div class="wp-flow-num">4</div>
+                <div>
+                  <strong>Signing Flow</strong>
+                  <span>Wrapped key retrieved from DB &rarr; sent to HSM &rarr; unwrapped inside HSM &rarr; signs transaction &rarr; signature returned. Plaintext key never exits HSM.</span>
+                </div>
+              </div>
+            </div>
+          </div>
+          <figcaption>Figure 2: BIP-32/39/44 key ceremony. The master key permanently resides in the HSM. Child keys are derived, wrapped, and stored externally. During signing, the wrapped key is temporarily unwrapped inside the HSM. This pattern enables millions of wallets without exhausting HSM key slots.</figcaption>
+        </figure>
+
+        <p>This design solves a critical scalability constraint. A Luna HSM typically supports between 2,000 and 100,000 key objects depending on the model and key size. Without key wrapping, each wallet would consume one HSM key slot, capping the platform at the HSM's object limit. With BIP-32 derivation and key wrapping, only the master key and the wrapping key occupy permanent HSM slots. All derived child keys are stored as encrypted blobs in the database &mdash; the platform can serve millions of wallets from a single HSM.</p>
+
+        <p>The wrapped child keys stored in the database are cryptographically inert. They are AES-256-wrapped by the HSM's internal wrapping key. Without access to the HSM, the wrapped blobs cannot be decrypted, used for signing, or converted into usable private keys. Even a complete database breach yields nothing actionable.</p>
+
+        <h2>PKCS#11 Interface</h2>
+
+        <p>All communication between the core services and the Luna HSM occurs through the PKCS#11 (Cryptoki) standard interface. PKCS#11 is the industry-standard API for hardware cryptographic tokens, defined by OASIS and used by every major HSM vendor. Blue Wallets uses the following PKCS#11 mechanisms:</p>
+
+        <table>
+          <thead><tr><th>Operation</th><th>PKCS#11 Mechanism</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>Key Generation</td><td><code>C_GenerateKeyPair</code></td><td>Generate EC/EdDSA key pair inside HSM</td></tr>
+            <tr><td>Child Derivation</td><td><code>C_DeriveKey</code></td><td>BIP-32 child key derivation from master</td></tr>
+            <tr><td>Key Wrapping</td><td><code>C_WrapKey</code></td><td>Encrypt child key for external storage</td></tr>
+            <tr><td>Key Unwrapping</td><td><code>C_UnwrapKey</code></td><td>Decrypt wrapped key inside HSM for signing</td></tr>
+            <tr><td>Signing</td><td><code>C_Sign</code></td><td>ECDSA/EdDSA signature generation</td></tr>
+            <tr><td>Verification</td><td><code>C_Verify</code></td><td>Signature verification using public key</td></tr>
+          </tbody>
+        </table>
+
+        <h2>HSM Cluster Topology</h2>
+
+        <p>The Luna HSM is deployed in an active-active configuration with a hot standby node. Key material is replicated between active nodes using Luna's built-in cloning mechanism. The standby node receives asynchronous replicas and can be promoted in under 30 seconds during a failover event.</p>
+
+        <table>
+          <thead><tr><th>Node</th><th>Role</th><th>Description</th></tr></thead>
+          <tbody>
+            <tr><td>HSM Node 1</td><td>Active</td><td>Primary node for key ceremonies and signing</td></tr>
+            <tr><td>HSM Node 2</td><td>Active</td><td>Load-balanced for high-throughput signing</td></tr>
+            <tr><td>HSM Node 3</td><td>Standby</td><td>Disaster recovery, promotable in &lt;30s</td></tr>
+          </tbody>
+        </table>
+
+        <p>All three nodes are physically located in the institution's data center. Key IDs, labels, and wrapping keys are consistent across nodes, enabling transparent failover without re-deriving or re-wrapping child keys.</p>
+
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <!-- SECURITY                                                    -->
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <section class="wp-section" id="security">
+
+        <h1>Security Model</h1>
+        <p class="wp-byline">Blue Wallets Team &mdash; <span class="wp-date-auto"></span></p>
+
+        <p>The security model is designed for a single assumption: <em>any individual component can be compromised</em>. Security does not depend on the integrity of any single server, service, database, or administrator. The architecture ensures that even a worst-case breach of the application layer yields no usable key material.</p>
+
+        <h2>Threat Model</h2>
+
+        <p><strong>Compromised application server.</strong> An attacker with full control of the application server can access the database, which contains wrapped child keys. These wrapped keys are AES-256-encrypted by the HSM's internal wrapping key. Without the HSM, they cannot be decrypted. The attacker cannot issue signing requests because the policy engine runs as a separate service and requires valid approval chains.</p>
+
+        <p><strong>Database breach.</strong> The database contains wrapped key blobs, public keys, wallet metadata, and transaction records. None of this data can be used to sign transactions or derive private keys. The wrapped key blobs are cryptographically inert without the HSM.</p>
+
+        <p><strong>Malicious insider (Operator role).</strong> An operator can initiate transactions but cannot approve them. The Maker-Checker separation ensures that no single role can both create and authorize a transfer. The Compliance role is required to approve transactions before the HSM is invoked.</p>
+
+        <p><strong>Physical HSM theft.</strong> Luna HSMs implement FIPS 140-3 Level 3 tamper-response mechanisms. Attempting to physically open or relocate the device without proper decommissioning triggers zeroization of all key material. The HSM becomes a brick.</p>
+
+        <h2>Defense in Depth</h2>
+
+        <p><strong>Network perimeter.</strong> The entire platform runs inside the bank's private network. The HSM is accessible only from the core services subnet. There is no public internet exposure. mTLS is enforced for all service-to-service communication.</p>
+
+        <p><strong>Application layer.</strong> JWT authentication on every request. Role-based access control with 28 granular permissions across 7 resource types (Vaults, Wallets, Keys, Policies, Roles, Users, AuditLogs). Maker-Checker enforcement &mdash; Operators initiate, Compliance approves, neither can do both. Input validation via Zod schemas on all API endpoints.</p>
+
+        <p><strong>Cryptographic layer.</strong> Master key permanently resident in FIPS 140-3 Level 3 HSM. Child keys wrapped with AES-256 by the HSM's internal wrapping key. All signing operations occur inside the HSM boundary. Public key-only address derivation in the application layer. Transaction signatures provide cryptographic proof of authorization.</p>
+
+        <p><strong>Data layer.</strong> Encryption at rest. No plaintext key material stored anywhere outside the HSM. Wrapped keys are useless without HSM access. Immutable audit logging for all state mutations. Separate read replicas for compliance and analytics queries.</p>
+
+        <h2>Transaction Signing Lifecycle</h2>
+
+        <p>Every transfer follows a deterministic pipeline. No step can be skipped.</p>
+
+        <figure class="wp-figure">
+          <div class="wp-diagram wp-diagram-flow">
+            <div class="wp-flow-step-box">
+              <div class="wp-flow-num">1</div>
+              <div>
+                <strong>Validate</strong>
+                <span>Schema check</span>
+              </div>
+            </div>
+            <div class="wp-flow-connector">&rarr;</div>
+            <div class="wp-flow-step-box">
+              <div class="wp-flow-num">2</div>
+              <div>
+                <strong>Balance</strong>
+                <span>Verify funds</span>
+              </div>
+            </div>
+            <div class="wp-flow-connector">&rarr;</div>
+            <div class="wp-flow-step-box">
+              <div class="wp-flow-num">3</div>
+              <div>
+                <strong>Policy</strong>
+                <span>Evaluate rules</span>
+              </div>
+            </div>
+            <div class="wp-flow-connector">&rarr;</div>
+            <div class="wp-flow-step-box">
+              <div class="wp-flow-num">4</div>
+              <div>
+                <strong>Unwrap</strong>
+                <span>HSM decrypts key</span>
+              </div>
+            </div>
+            <div class="wp-flow-connector">&rarr;</div>
+            <div class="wp-flow-step-box">
+              <div class="wp-flow-num">5</div>
+              <div>
+                <strong>Sign</strong>
+                <span>HSM signs tx</span>
+              </div>
+            </div>
+            <div class="wp-flow-connector">&rarr;</div>
+            <div class="wp-flow-step-box">
+              <div class="wp-flow-num">6</div>
+              <div>
+                <strong>Commit</strong>
+                <span>Update + respond</span>
+              </div>
+            </div>
+          </div>
+          <figcaption>Figure 3: Transaction signing lifecycle. Steps 1-3 are validation gates. Step 4 unwraps the child key inside the HSM. Step 5 signs using the unwrapped key. The plaintext child key exists only inside the HSM during steps 4-5.</figcaption>
+        </figure>
+
+        <p><strong>Steps 1&ndash;3</strong> are pre-signing gates. The API gateway validates the request schema. The Wallet Service verifies sufficient balance. The Policy Engine evaluates all attached policies. If any gate fails, the HSM is never invoked &mdash; the failure is recorded for audit.</p>
+
+        <p><strong>Step 4</strong> is the key unwrapping operation. The Signing Service retrieves the wrapped child key from the database and sends it to the HSM via <code>C_UnwrapKey</code>. The HSM decrypts the wrapped blob using its internal wrapping key, producing a temporary key object inside the HSM's secure memory.</p>
+
+        <p><strong>Step 5</strong> is the signing operation. The HSM signs the transaction hash using the unwrapped child key via <code>C_Sign</code>. The signing mechanism depends on the key algorithm &mdash; <code>CKM_ECDSA</code> for secp256k1 chains, <code>CKM_EDDSA</code> for Ed25519 chains. After signing, the temporary key object is destroyed inside the HSM.</p>
+
+        <p><strong>Step 6</strong> commits the result. The source wallet balance is decremented and the destination balance is incremented atomically. The transaction record is persisted with the signature, the full policy evaluation results, and a timestamp. The signed transaction is returned to the client.</p>
+
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <!-- OPERATIONS                                                  -->
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <section class="wp-section" id="operations">
+
+        <h1>Operations</h1>
+        <p class="wp-byline">Blue Wallets Team &mdash; <span class="wp-date-auto"></span></p>
+
+        <h2>Chain Support</h2>
+
+        <p>The platform supports 9 blockchain networks through a unified address derivation layer. Each chain maps to a specific elliptic curve algorithm and BIP-44 coin type. Address derivation uses only the public key component &mdash; the private key remains wrapped in the database and is only unwrapped inside the HSM during signing.</p>
+
+        <table>
+          <thead><tr><th>Chain</th><th>Algorithm</th><th>BIP-44 Coin</th><th>Address Format</th></tr></thead>
+          <tbody>
+            <tr><td>Bitcoin</td><td>secp256k1</td><td>0</td><td>bech32 (bc1...)</td></tr>
+            <tr><td>Ethereum</td><td>secp256k1</td><td>60</td><td>EIP-55 (0x...)</td></tr>
+            <tr><td>Solana</td><td>Ed25519</td><td>501</td><td>Base58</td></tr>
+            <tr><td>Polygon</td><td>secp256k1</td><td>60</td><td>EIP-55 (EVM)</td></tr>
+            <tr><td>BSC</td><td>secp256k1</td><td>60</td><td>EIP-55 (EVM)</td></tr>
+            <tr><td>Arbitrum</td><td>secp256k1</td><td>60</td><td>EIP-55 (EVM)</td></tr>
+            <tr><td>Tron</td><td>secp256k1</td><td>195</td><td>Base58Check (T...)</td></tr>
+            <tr><td>Avalanche</td><td>secp256k1</td><td>60</td><td>EIP-55 (EVM)</td></tr>
+            <tr><td>Litecoin</td><td>secp256k1</td><td>2</td><td>bech32 (ltc1...)</td></tr>
+          </tbody>
+        </table>
+
+        <h2>Policy Framework</h2>
+
+        <p>The policy framework provides configurable governance rules evaluated before every signing operation. Policies are composable &mdash; multiple rules per policy, multiple policies per wallet. If <strong>any single rule fails</strong> across any attached policy, the transaction is rejected and the HSM is never invoked.</p>
+
+        <table>
+          <thead><tr><th>Rule Type</th><th>Parameters</th><th>Purpose</th></tr></thead>
+          <tbody>
+            <tr><td>Spending Limit</td><td><code>maxAmount</code></td><td>Cap per-transaction amount</td></tr>
+            <tr><td>Daily Limit</td><td><code>dailyMax</code></td><td>Cap 24-hour rolling volume</td></tr>
+            <tr><td>Whitelist</td><td><code>walletIds[]</code></td><td>Restrict to approved destinations</td></tr>
+            <tr><td>Blacklist</td><td><code>walletIds[]</code></td><td>Block sanctioned addresses</td></tr>
+            <tr><td>Velocity</td><td><code>maxCount, windowHours</code></td><td>Limit tx frequency</td></tr>
+            <tr><td>Time Window</td><td><code>startHour, endHour</code></td><td>Business hours only</td></tr>
+          </tbody>
+        </table>
+
+        <h2>On-Premises Deployment</h2>
+
+        <p>The platform is deployed as containerized services on the institution's infrastructure. The bank provisions server hardware, network connectivity to the Luna HSM, and a database instance. Blue Wallets provides the container images and deployment configuration.</p>
+
+        <table>
+          <thead><tr><th>Component</th><th>Runs On</th><th>Connects To</th></tr></thead>
+          <tbody>
+            <tr><td>Portal (UI)</td><td>Bank's web server</td><td>API Gateway</td></tr>
+            <tr><td>API Gateway</td><td>Bank's app server</td><td>Core Services</td></tr>
+            <tr><td>Core Services (4)</td><td>Bank's app server</td><td>HSM (PKCS#11), Database</td></tr>
+            <tr><td>Luna HSM</td><td>Bank's data center</td><td>Private network only</td></tr>
+            <tr><td>Database</td><td>Bank's DB server</td><td>Core Services (read/write)</td></tr>
+          </tbody>
+        </table>
+
+        <p>The institution's IT team manages the infrastructure. Blue Wallets provides software updates as container image releases. The institution controls the update schedule, testing, and rollout &mdash; there is no automatic update mechanism that could introduce untested code into a production custody environment.</p>
+
+      </section>
+
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <!-- ACKNOWLEDGMENTS                                             -->
+      <!-- ══════════════════════════════════════════════════════════ -->
+      <section class="wp-section wp-section-ack" id="acknowledgments">
+        <h2>Acknowledgments</h2>
+        <p>Blue Wallets builds on open standards: PKCS#11 for HSM communication, BIP-32/39/44 for hierarchical deterministic wallets, FIPS 140-3 for cryptographic module certification, and established elliptic curve algorithms (secp256k1, Ed25519) for blockchain compatibility. The platform is designed for regulated financial institutions that require full custody sovereignty over digital asset infrastructure.</p>
+      </section>
+
+    </article>
+  </main>
+
+  <footer class="wp-footer">
+    <div class="wp-footer-inner">
+      <span>&copy; 2026 Blue Wallets. Confidential.</span>
+      <a href="/">Dashboard</a>
+    </div>
+  </footer>
+
+  <script>
+    const dateStr = new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long' });
+    document.getElementById('wp-date').textContent = dateStr;
+    document.querySelectorAll('.wp-date-auto').forEach(el => el.textContent = dateStr);
+
+    const sections = document.querySelectorAll('.wp-section[id]');
+    const navLinks = document.querySelectorAll('.wp-nav-link');
+
+    function updateNav() {
+      let current = 'index';
+      sections.forEach(s => {
+        if (s.getBoundingClientRect().top < 140) current = s.id;
+      });
+      navLinks.forEach(link => {
+        link.classList.toggle('active', link.dataset.section === current);
+      });
+    }
+    window.addEventListener('scroll', updateNav, { passive: true });
+
+    navLinks.forEach(link => {
+      link.addEventListener('click', (e) => {
+        e.preventDefault();
+        const target = document.getElementById(link.dataset.section);
+        if (target) window.scrollTo({ top: target.offsetTop - 64, behavior: 'smooth' });
+      });
+    });
+  </script>
+</body>
+</html>

@@ -1,85 +1,49 @@
 /**
- * HSM Key Ceremony Service
+ * HSM Key Ceremony Service — FIPS 140-3 Level 3 Compliant
  *
- * Implements the BIP-32/39/44 key ceremony against the real HSM with
- * Shamir's Secret Sharing (3-of-5) and dual-officer approval:
- *   1. Dual-officer approval required before proceeding
- *   2. Generate 256-bit entropy via PKCS#11 C_GenerateRandom
- *   3. Split entropy into 5 Shamir shares (threshold: 3)
- *   4. Custodians acknowledge their individual shares
- *   5. Reconstruct entropy from 3+ shares, derive BIP-32 master key,
- *      import to HSM as non-extractable, clear all shares from memory
+ * Architecture:
+ *   The ceremony generates one permanent AES-256 key inside the Luna HSM:
  *
- * The master private key is imported into the HSM and immediately made
- * non-extractable. It never exists in plaintext after import.
+ *   blue:wrap:v1  — Master Wrap Key (CKA_WRAP=true, CKA_EXTRACTABLE=false)
+ *     Used to wrap wallet EC private keys via C_WrapKey(CKM_AES_CBC_PAD).
+ *     Wrapped blobs are stored in the database. The private key material
+ *     NEVER exists in application memory — it exists inside the HSM only
+ *     for the brief duration of C_Sign, then is destroyed.
+ *
+ * Disaster recovery:
+ *   Handled entirely by the bank's Luna HA cluster and Backup HSM.
+ *   Blue Wallets does not implement a software recovery path.
+ *
+ * What was removed vs the old design:
+ *   - BIP-39 mnemonic generation (unnecessary — no human writes down words)
+ *   - BIP-32 HMAC-SHA512 derivation (happened in Node.js memory — Level 3 violation)
+ *   - Shamir's Secret Sharing on entropy (happened in Node.js memory — Level 3 violation)
+ *   - C_GenerateRandom entropy pulled out of HSM (Level 3 violation)
+ *   - C_CreateObject key import (key touched memory — Level 3 violation)
  */
 
 import pkcs11js from 'pkcs11js';
-import * as bip39 from 'bip39';
-import * as sss from 'shamirs-secret-sharing';
-import crypto from 'crypto';
-import { v4 as uuidv4 } from 'uuid';
 import { HsmSession } from './hsm-session';
 import { CeremonyApprovalService } from './ceremony-approval-service';
 import { logger } from '../utils/logger';
 
-export interface CeremonyEntropy {
-  entropyHex: string;       // raw 256-bit hex from HSM
-  sharesGenerated: number;  // total shares created
-  sharesThreshold: number;  // minimum shares needed to reconstruct (3 production, 1 demo)
-}
-
-export interface CeremonyMasterKey {
-  masterKeyId: string;    // HSM object label / identifier
-  publicKeyHex: string;   // compressed secp256k1 public key (for display only)
-  chainCodeHex: string;   // BIP-32 chain code (right 32 bytes of HMAC-SHA512)
-  derivationInfo: {
-    seedHex: string;      // first 16 bytes only for display (never log full seed)
-    hmacPreviewHex: string;
-  };
-}
+export const WRAP_KEY_LABEL = 'blue:wrap:v1';
 
 export interface CeremonyState {
-  completed: boolean;
-  completedAt: Date | null;
-  masterKeyId: string | null;
-  chainCodeHex: string | null;
-  publicKeyHex: string | null;
-  coinTypes: string[];
-  sharesAcknowledged: number; // count of acknowledged shares
-  entropyGenerated: boolean;
-  sharesTotal: number;
-  sharesThreshold: number;
-  demoMode: boolean;
+  completed:      boolean;
+  completedAt:    Date | null;
+  wrapKeyLabel:   string | null;   // label of the wrap key on HSM
+  coinTypes:      string[];
+  keysGenerated:  boolean;         // true if blue:wrap:v1 exists on HSM
 }
 
 export class CeremonyService {
-  private state: {
-    completed: boolean;
-    completedAt: Date | null;
-    masterKeyId: string | null;
-    chainCodeHex: string | null;
-    publicKeyHex: string | null;
-    coinTypes: string[];
-    entropyBuffer: Buffer | null;  // raw entropy, cleared after seal
-    sharesHex: string[] | null;    // N shares, cleared after seal
-    sharesAcknowledged: boolean[]; // which shares have been acknowledged
-    sharesThreshold: number;       // min shares needed to reconstruct (3 production, 1 demo)
-    sharesTotal: number;           // total shares generated (5 production, 1 demo)
-    demoMode: boolean;             // when true: 1-of-1 Shamir, self-approval allowed
-  } = {
-    completed: false,
-    completedAt: null,
-    masterKeyId: null,
-    chainCodeHex: null,
-    publicKeyHex: null,
-    coinTypes: [],
-    entropyBuffer: null,
-    sharesHex: null,
-    sharesAcknowledged: [],
-    sharesThreshold: 3,
-    sharesTotal: 5,
-    demoMode: false,
+  private state = {
+    completed:    false,
+    completedAt:  null as Date | null,
+    wrapKeyLabel: null as string | null,
+    coinTypes:    [] as string[],
+    keysGenerated: false,
   };
 
   constructor(
@@ -87,229 +51,143 @@ export class CeremonyService {
     private approvalService: CeremonyApprovalService,
   ) {}
 
-  // ── Step 1: Generate entropy from HSM (requires approved ceremony) ─────────
+  /**
+   * Called on server startup (or after HSM reconnect).
+   * Checks whether master keys already exist on the HSM partition.
+   * If they do, marks the ceremony as previously completed so the dashboard
+   * shows the correct state without requiring re-ceremony.
+   */
+  async initialize(): Promise<void> {
+    try {
+      if (this.hsmSession.isConnected() && this.wrapKeyExistsOnHsm()) {
+        this.state.keysGenerated = true;
+        this.state.wrapKeyLabel  = WRAP_KEY_LABEL;
+        logger.info('Key ceremony: master wrap key found on HSM — ceremony previously completed');
+      }
+    } catch {
+      // HSM not connected yet — that is fine, ceremony will run later
+    }
+  }
 
-  async generateEntropy(demoMode = false): Promise<CeremonyEntropy> {
+  /**
+   * Generate the master wrap key inside the HSM.
+   *
+   * Requires an approved ceremony request.
+   * The key is generated entirely inside the HSM boundary via C_GenerateKey.
+   * CKA_SENSITIVE=true  — cannot be read in plaintext
+   * CKA_EXTRACTABLE=false — cannot leave the HSM under any circumstance
+   *
+   * Idempotent: if blue:wrap:v1 already exists, marks it as active and returns.
+   */
+  async generateMasterKeys(): Promise<{ wrapKeyLabel: string }> {
     const approval = this.approvalService.getActive();
     if (!approval || approval.status !== 'approved') {
-      throw new Error('Ceremony not approved. Two officers must approve before generating entropy.');
+      throw new Error('Ceremony not approved. Officers must approve before generating keys.');
     }
 
     const session = this.hsmSession.getSession();
-    const pkcs11 = this.hsmSession.getPkcs11();
+    const pkcs11  = this.hsmSession.getPkcs11();
 
-    // Demo mode: 1-of-1 Shamir (single share, no quorum needed)
-    const sharesTotal    = demoMode ? 1 : 5;
-    const sharesThreshold = demoMode ? 1 : 3;
+    // Idempotent check — key may already exist from a prior run
+    if (this.wrapKeyExistsOnHsm()) {
+      logger.info('Master wrap key already exists on HSM, reusing', { label: WRAP_KEY_LABEL });
+      this.state.wrapKeyLabel  = WRAP_KEY_LABEL;
+      this.state.keysGenerated = true;
+      this.approvalService.markUsed(approval.id);
+      return { wrapKeyLabel: WRAP_KEY_LABEL };
+    }
 
-    logger.info('Generating 256-bit entropy via C_GenerateRandom', { demoMode, sharesTotal, sharesThreshold });
+    logger.info('Generating master wrap key on HSM', { label: WRAP_KEY_LABEL });
 
-    // Pull 32 bytes (256 bits) from the HSM's hardware RNG
-    const entropyBuffer = Buffer.alloc(32);
-    const result = pkcs11.C_GenerateRandom(session, entropyBuffer);
+    /*
+     * AES-256 Master Wrap Key
+     * ─────────────────────────────────────────────────────────────────────
+     * CKA_TOKEN=true         Permanent token object (survives session close)
+     * CKA_PRIVATE=true       Requires authenticated session to access
+     * CKA_SENSITIVE=true     Cannot be read in plaintext via GetAttributeValue
+     * CKA_EXTRACTABLE=false  Cannot leave HSM — not even via C_WrapKey
+     * CKA_WRAP=true          Can wrap (encrypt) other key objects
+     * CKA_UNWRAP=true        Can unwrap (decrypt) wrapped key objects
+     * CKA_MODIFIABLE=false   Attributes are immutable after creation
+     */
+    const wrapKeyTemplate: pkcs11js.Template = [
+      { type: pkcs11js.CKA_CLASS,       value: pkcs11js.CKO_SECRET_KEY },
+      { type: pkcs11js.CKA_KEY_TYPE,    value: pkcs11js.CKK_AES },
+      { type: pkcs11js.CKA_VALUE_LEN,   value: 32 },
+      { type: pkcs11js.CKA_TOKEN,       value: true },
+      { type: pkcs11js.CKA_PRIVATE,     value: true },
+      { type: pkcs11js.CKA_SENSITIVE,   value: true },
+      { type: pkcs11js.CKA_EXTRACTABLE, value: false },
+      { type: pkcs11js.CKA_WRAP,        value: true },
+      { type: pkcs11js.CKA_UNWRAP,      value: true },
+      { type: pkcs11js.CKA_MODIFIABLE,  value: false },
+      { type: pkcs11js.CKA_LABEL,       value: WRAP_KEY_LABEL },
+      { type: pkcs11js.CKA_ID,          value: Buffer.from(WRAP_KEY_LABEL) },
+    ];
 
-    // Split entropy into Shamir shares
-    const shareBuffers: Buffer[] = sss.split(result, { shares: sharesTotal, threshold: sharesThreshold });
-    const shares: string[] = shareBuffers.map((b: Buffer) => b.toString('hex'));
+    pkcs11.C_GenerateKey(
+      session,
+      { mechanism: pkcs11js.CKM_AES_KEY_GEN },
+      wrapKeyTemplate,
+    );
 
-    // Store in state
-    this.state.entropyBuffer    = result;
-    this.state.sharesHex        = shares;
-    this.state.sharesAcknowledged = new Array(sharesTotal).fill(false);
-    this.state.sharesThreshold  = sharesThreshold;
-    this.state.sharesTotal      = sharesTotal;
-    this.state.demoMode         = demoMode;
+    this.state.wrapKeyLabel  = WRAP_KEY_LABEL;
+    this.state.keysGenerated = true;
+    this.approvalService.markUsed(approval.id);
 
-    logger.info('Entropy generated and split into Shamir shares', {
-      entropyLength: result.length,
-      shareCount: shares.length,
-      threshold: sharesThreshold,
+    logger.info('Master wrap key generated and sealed into HSM', {
+      label: WRAP_KEY_LABEL,
+      algorithm: 'AES-256',
+      extractable: false,
     });
 
-    return {
-      entropyHex:      result.toString('hex'),
-      sharesGenerated: shares.length,
-      sharesThreshold,
-    };
+    return { wrapKeyLabel: WRAP_KEY_LABEL };
   }
 
-  // ── Step 2: Get a single Shamir share for a custodian ─────────────────────
-
-  getShare(index: number): string {
-    if (!this.state.sharesHex) {
-      throw new Error('Shares not yet generated. Run generateEntropy() first.');
-    }
-    if (index < 0 || index >= this.state.sharesHex.length) {
-      throw new Error(`Share index ${index} out of range (0–${this.state.sharesHex.length - 1}).`);
-    }
-    return this.state.sharesHex[index];
-  }
-
-  // ── Step 3: Acknowledge a share has been recorded by its custodian ─────────
-
-  acknowledgeShare(index: number): void {
-    if (!this.state.sharesHex) {
-      throw new Error('Shares not yet generated.');
-    }
-    if (index < 0 || index >= this.state.sharesAcknowledged.length) {
-      throw new Error(`Share index ${index} out of range.`);
-    }
-    this.state.sharesAcknowledged[index] = true;
-    logger.info('Share acknowledged', { index, custodian: index + 1 });
-  }
-
-  // ── Step 4: Reconstruct entropy from shares, derive and seal master key ────
-
-  async reconstructAndSeal(submittedShares: string[]): Promise<CeremonyMasterKey> {
-    const requiredShares = this.state.sharesThreshold;
-    if (submittedShares.length < requiredShares) {
-      throw new Error(`At least ${requiredShares} Shamir share${requiredShares > 1 ? 's are' : ' is'} required to reconstruct the master key.`);
-    }
-
-    const activeApproval = this.approvalService.getActive();
-    if (!activeApproval || activeApproval.status !== 'approved') {
-      throw new Error('Ceremony approval is no longer valid.');
-    }
-
-    logger.info('Reconstructing entropy from Shamir shares', { shareCount: submittedShares.length });
-
-    // Reconstruct entropy
-    const entropy = sss.combine(submittedShares.map((s: string) => Buffer.from(s, 'hex')));
-
-    // Convert entropy → BIP-39 mnemonic
-    const mnemonicStr = bip39.entropyToMnemonic(entropy.toString('hex'));
-
-    // BIP-39: mnemonic → 512-bit seed (PBKDF2, 2048 rounds)
-    logger.info('Deriving seed from reconstructed entropy via BIP-39');
-    const seed = await bip39.mnemonicToSeed(mnemonicStr);
-
-    // BIP-32: seed → master key via HMAC-SHA512("Bitcoin seed", seed)
-    const hmac = crypto.createHmac('sha512', Buffer.from('Bitcoin seed', 'utf8'));
-    hmac.update(seed);
-    const masterKeyMaterial = hmac.digest(); // 64 bytes total
-
-    const masterPrivKeyBytes = masterKeyMaterial.slice(0, 32); // left  32 bytes
-    const chainCode          = masterKeyMaterial.slice(32, 64); // right 32 bytes
-
-    logger.info('BIP-32 master key derived', {
-      masterKeyLength: masterPrivKeyBytes.length,
-      chainCodeLength: chainCode.length,
-    });
-
-    // Import master private key into HSM as a non-extractable generic secret
-    const masterKeyId = `ceremony:master:${uuidv4()}`;
-    const hsmHandle = this.importKeyIntoHsm(masterPrivKeyBytes, masterKeyId);
-
-    // Derive compressed public key from the master private key (for display)
-    const publicKeyHex = this.deriveCompressedPublicKey(masterPrivKeyBytes);
-
-    const chainCodeHex = chainCode.toString('hex');
-    const publicKeyHexStr = publicKeyHex.toString('hex');
-
-    // Persist to ceremony state
-    this.state.masterKeyId = masterKeyId;
-    this.state.chainCodeHex = chainCodeHex;
-    this.state.publicKeyHex = publicKeyHexStr;
-
-    // Mark approval as used and clear shares from memory
-    this.approvalService.markUsed(activeApproval.id);
-    this.state.sharesHex = null;
-    this.state.entropyBuffer = null;
-
-    logger.info('Master key sealed into HSM, shares cleared', { masterKeyId, hsmHandle });
-
-    return {
-      masterKeyId,
-      publicKeyHex: publicKeyHexStr,
-      chainCodeHex,
-      derivationInfo: {
-        // Only expose first 16 bytes of seed for UI display — never log full seed
-        seedHex: seed.toString('hex').slice(0, 32) + '…',
-        hmacPreviewHex: masterKeyMaterial.toString('hex').slice(0, 32) + '…',
-      },
-    };
-  }
-
-  // ── Step 5: Finalise ceremony ──────────────────────────────────────────────
-
+  /** Finalise ceremony with the coin types the bank wants to support. */
   completeCeremony(coinTypes: string[]): CeremonyState {
-    if (!this.state.masterKeyId) {
-      throw new Error('Master key not sealed. Run reconstructAndSeal() first.');
+    const keysReady = this.state.keysGenerated || this.wrapKeyExistsOnHsm();
+    if (!keysReady) {
+      throw new Error('Master keys not yet generated. Run key generation step first.');
     }
-
-    this.state.completed = true;
+    this.state.completed   = true;
     this.state.completedAt = new Date();
-    this.state.coinTypes = coinTypes;
-
-    logger.info('Key ceremony completed', {
-      masterKeyId: this.state.masterKeyId,
-      coinTypes,
-      completedAt: this.state.completedAt,
-    });
-
+    this.state.coinTypes   = coinTypes;
+    logger.info('Key ceremony completed', { coinTypes });
     return this.getStatus();
   }
 
   getStatus(): CeremonyState {
+    // Always do a live HSM check so status survives server restarts
+    const keyOnHsm = this.hsmSession.isConnected() ? this.wrapKeyExistsOnHsm() : false;
+    if (keyOnHsm && !this.state.keysGenerated) {
+      this.state.keysGenerated = true;
+      this.state.wrapKeyLabel  = WRAP_KEY_LABEL;
+    }
     return {
-      completed:         this.state.completed,
-      completedAt:       this.state.completedAt,
-      masterKeyId:       this.state.masterKeyId,
-      chainCodeHex:      this.state.chainCodeHex,
-      publicKeyHex:      this.state.publicKeyHex,
-      coinTypes:         this.state.coinTypes,
-      sharesAcknowledged: this.state.sharesAcknowledged.filter(Boolean).length,
-      entropyGenerated:  this.state.sharesHex !== null || this.state.masterKeyId !== null,
-      sharesTotal:       this.state.sharesTotal,
-      sharesThreshold:   this.state.sharesThreshold,
-      demoMode:          this.state.demoMode,
+      completed:     this.state.completed,
+      completedAt:   this.state.completedAt,
+      wrapKeyLabel:  keyOnHsm ? WRAP_KEY_LABEL : null,
+      coinTypes:     this.state.coinTypes,
+      keysGenerated: keyOnHsm || this.state.keysGenerated,
     };
   }
 
   // ── Private helpers ────────────────────────────────────────────────────────
 
-  /**
-   * Import raw 32-byte key material into the HSM as a non-extractable
-   * generic secret (CKK_GENERIC_SECRET). This seals it inside the HSM —
-   * the bytes are never readable again after C_CreateObject returns.
-   */
-  private importKeyIntoHsm(keyBytes: Buffer, label: string): pkcs11js.Handle {
-    const session = this.hsmSession.getSession();
-    const pkcs11 = this.hsmSession.getPkcs11();
-
-    const template: pkcs11js.Template = [
-      { type: pkcs11js.CKA_CLASS,       value: pkcs11js.CKO_SECRET_KEY },
-      { type: pkcs11js.CKA_KEY_TYPE,    value: pkcs11js.CKK_GENERIC_SECRET },
-      { type: pkcs11js.CKA_TOKEN,       value: true },
-      { type: pkcs11js.CKA_LABEL,       value: label },
-      { type: pkcs11js.CKA_ID,          value: Buffer.from(label) },
-      { type: pkcs11js.CKA_SENSITIVE,   value: true },
-      { type: pkcs11js.CKA_EXTRACTABLE, value: false },
-      // CKA_VALUE sets the raw key bytes; VALUE_LEN is derived automatically
-      { type: pkcs11js.CKA_VALUE,       value: keyBytes },
-    ];
-
-    const handle = pkcs11.C_CreateObject(session, template);
-    logger.info('Master key imported into HSM (non-extractable)', {
-      label,
-      handle: handle.toString(),
-    });
-    return handle;
-  }
-
-  /**
-   * Placeholder: derives a display-only 33-byte value for the ceremony UI.
-   * WARNING: This is NOT a real secp256k1 public key — it is SHA256(privateKey)
-   * with a parity prefix. Real EC point multiplication would require adding
-   * tiny-secp256k1 or @noble/secp256k1. The master private key itself is safely
-   * sealed inside the HSM and never exposed.
-   *
-   * // placeholder: not a real secp256k1 public key
-   */
-  private deriveCompressedPublicKey(privateKeyBytes: Buffer): Buffer {
-    // placeholder: not a real secp256k1 public key — SHA256 of privkey for display only
-    const hash = crypto.createHash('sha256').update(privateKeyBytes).digest();
-    const prefix = (privateKeyBytes[31] & 1) === 0 ? 0x02 : 0x03;
-    return Buffer.concat([Buffer.from([prefix]), hash]);
+  private wrapKeyExistsOnHsm(): boolean {
+    try {
+      const session = this.hsmSession.getSession();
+      const pkcs11  = this.hsmSession.getPkcs11();
+      pkcs11.C_FindObjectsInit(session, [
+        { type: pkcs11js.CKA_LABEL, value: WRAP_KEY_LABEL },
+        { type: pkcs11js.CKA_TOKEN, value: true },
+      ]);
+      const handle = pkcs11.C_FindObjects(session);
+      pkcs11.C_FindObjectsFinal(session);
+      return !!handle;
+    } catch {
+      return false;
+    }
   }
 }

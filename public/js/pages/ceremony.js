@@ -1,16 +1,14 @@
-/* HSM Key Ceremony — Shamir 3-of-5 + dual-control approval wizard */
+/* HSM Key Ceremony — FIPS 140-3 Level 3 · dual-control approval */
 
 import { api, auth, setSessionToken, getSessionToken } from '../api.js';
 
 const STEPS = [
-  { id: 'connect',     title: 'Connect HSM',          subtitle: 'Configure your PKCS#11 provider' },
-  { id: 'initiate',   title: 'Initiate Ceremony',     subtitle: 'Request dual-officer approval to begin' },
-  { id: 'approve',    title: 'Officer Approval',      subtitle: 'Two independent officers must authorise' },
-  { id: 'entropy',    title: 'Generate Entropy',      subtitle: 'HSM hardware random number generation' },
-  { id: 'shares',     title: 'Distribute Shares',     subtitle: 'Shamir 3-of-5 — each custodian records their share' },
-  { id: 'reconstruct', title: 'Reconstruct & Seal',   subtitle: 'Enter 3 shares to derive and seal master key' },
-  { id: 'accounts',   title: 'Account Structure',     subtitle: 'BIP-44 coin type configuration' },
-  { id: 'complete',   title: 'HSM Ready',             subtitle: 'Your hardware module is initialized' },
+  { id: 'connect',   title: 'Connect HSM',          subtitle: 'Configure your PKCS#11 provider' },
+  { id: 'initiate',  title: 'Initiate Ceremony',    subtitle: 'Request dual-officer approval to begin' },
+  { id: 'approve',   title: 'Officer Approval',     subtitle: 'Two independent officers must authorise' },
+  { id: 'keygen',    title: 'Initialize HSM Keys',  subtitle: 'AES-256 master wrap key generated inside the HSM' },
+  { id: 'accounts',  title: 'Account Structure',    subtitle: 'BIP-44 coin type configuration' },
+  { id: 'complete',  title: 'HSM Ready',            subtitle: 'Your hardware module is initialized' },
 ];
 
 // Well-known PKCS#11 library presets
@@ -66,59 +64,38 @@ const BIP44_COINS = [
 let state = {
   step: 0,
 
-  // Demo mode
+  // Demo mode (bypass quorum)
   demoMode: false,
 
-  // HSM connect step
-  hsmConnected: false,
-  hsmProvider: null,
-  hsmLibrary: '',
-  hsmSlot: 0,
-  hsmConnecting: false,
+  // HSM connect
+  hsmConnected:    false,
+  hsmProvider:     null,
+  hsmLibrary:      '',
+  hsmSlot:         0,
+  hsmConnecting:   false,
   hsmConnectError: null,
-  hsmTokenLabel: null,
-  selectedPreset: 'luna',
-  hsmConnectStage: 0, // 0=idle, 1=library, 2=slots, 3=session, 4=auth, 5=done
+  hsmTokenLabel:   null,
+  selectedPreset:  'luna',
+  hsmConnectStage: 0,   // 0=idle 1=library 2=slots 3=session 4=auth 5=done
 
-  // Approval state
-  approvalId: null,
-  approvalStatus: null,   // 'pending' | 'approved'
-  approvalCount: 0,
-  approvalRequestedBy: '',
-  approvalReason: '',
+  // Approval
+  approvalId:           null,
+  approvalStatus:       null,   // 'pending' | 'approved'
+  approvalCount:        0,
+  approvalRequestedBy:  '',
+  approvalReason:       '',
   officerLoginUsername: '',
   officerLoginPassword: '',
-  officerLoginError: null,
-  officerLoginLoading: false,
+  officerLoginError:    null,
+  officerLoginLoading:  false,
 
-  // Entropy state
-  entropyHex: null,
-  entropyDone: false,
-  entropyError: null,
-  entropyInterval: null,
-  logLines: [],
+  // Key generation (Step 4)
+  keygenLoading:  false,
+  keygenDone:     false,
+  keygenError:    null,
+  wrapKeyLabel:   null,
 
-  // Share distribution state
-  currentShareIndex: 0,   // 0-4, which share is being shown
-  currentShare: null,     // hex string of current share
-  currentShareLoading: false,
-  currentShareError: null,
-  custodianNameInput: '',
-  sharesAcknowledged: 0,
-  sharesTotal: 5,         // set from entropy response
-  sharesThreshold: 3,     // set from entropy response
-
-  // Reconstruction state
-  reconstructShares: ['', '', ''],
-  reconstructError: null,
-  reconstructLoading: false,
-  reconstructDone: false,
-
-  // Master key data
-  masterKeyId: null,
-  publicKeyHex: null,
-  chainCodeHex: null,
-  derivationInfo: null,
+  // Completion
   completedAt: null,
 
   // Accounts
@@ -195,7 +172,7 @@ function renderConnect() {
     return `
       <div class="cer-connect">
         <div class="cer-hsm-connected-hero">
-          <div class="cer-electric-ring" id="electric-ring">
+          <div class="cer-electric-ring cer-electric-done" id="electric-ring">
             <svg width="80" height="80" viewBox="0 0 80 80" fill="none">
               <circle cx="40" cy="40" r="36" stroke="rgba(34,197,94,0.15)" stroke-width="2"/>
               <circle cx="40" cy="40" r="28" stroke="rgba(34,197,94,0.25)" stroke-width="2"/>
@@ -259,17 +236,6 @@ function renderConnect() {
   return `
     <div class="cer-connect">
 
-      <!-- Demo mode CTA -->
-      <div class="cer-demo-cta">
-        <div class="cer-demo-cta-text">
-          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 2l6 5-6 5V2z" fill="#F59E0B"/></svg>
-          Running an investor demo?
-        </div>
-        <button class="btn cer-demo-btn" id="demo-mode-btn">
-          🎬 Enter Demo Mode
-        </button>
-      </div>
-
       <!-- Vendor picker -->
       <div class="cer-connect-section">
         <div class="cer-connect-label">HSM Provider</div>
@@ -329,17 +295,53 @@ function renderConnect() {
 function renderInitiate() {
   return `
     <div class="cer-initiate">
-      <div class="cer-initiate-info">
-        <svg width="20" height="20" viewBox="0 0 20 20" fill="none"><circle cx="10" cy="10" r="8" stroke="#2563EB" stroke-width="1.5"/><path d="M10 9v5M10 7v.5" stroke="#2563EB" stroke-width="1.5" stroke-linecap="round"/></svg>
-        <p>This ceremony requires dual-officer approval before entropy can be generated.
-        Two independent officers must authorise this request. Your identity is taken from your current session.</p>
+
+      <!-- Info callout -->
+      <div class="cer-initiate-callout">
+        <div class="cer-initiate-callout-icon">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <circle cx="8" cy="8" r="6" stroke="#3B82F6" stroke-width="1.5"/>
+            <path d="M8 7v4M8 5v.6" stroke="#3B82F6" stroke-width="1.5" stroke-linecap="round"/>
+          </svg>
+        </div>
+        <p class="cer-initiate-callout-text">
+          Dual-officer approval is required before entropy generation can begin.
+          Two independent officers will log in sequentially and each authorise this request.
+          Your identity is recorded from your current session.
+        </p>
       </div>
 
-      <div class="cer-form-group">
-        <label class="cer-form-label" for="initiate-reason">Reason for Ceremony</label>
+      <!-- Process steps (mini) -->
+      <div class="cer-initiate-steps">
+        <div class="cer-initiate-step">
+          <div class="cer-initiate-step-num">1</div>
+          <span>You initiate &amp; state a reason</span>
+        </div>
+        <div class="cer-initiate-step-arrow">→</div>
+        <div class="cer-initiate-step">
+          <div class="cer-initiate-step-num">2</div>
+          <span>Officer 1 logs in &amp; approves</span>
+        </div>
+        <div class="cer-initiate-step-arrow">→</div>
+        <div class="cer-initiate-step">
+          <div class="cer-initiate-step-num">3</div>
+          <span>Officer 2 logs in &amp; approves</span>
+        </div>
+      </div>
+
+      <!-- Reason field -->
+      <div class="cer-form-group cer-initiate-reason-group">
+        <label class="cer-form-label" for="initiate-reason">
+          Reason for Ceremony
+          <span class="cer-form-required">*</span>
+        </label>
         <input class="cer-connect-input" id="initiate-reason" type="text"
           placeholder="e.g. Initial HSM setup for production deployment"
           value="${state.approvalReason}" autocomplete="off">
+        <div class="cer-form-hint">
+          <svg width="11" height="11" viewBox="0 0 12 12" fill="none"><path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" opacity="0.5"/></svg>
+          Logged to the audit trail and shown to approving officers
+        </div>
       </div>
 
     </div>`;
@@ -349,78 +351,196 @@ function renderApprove() {
   const count = state.approvalCount;
   const isApproved = state.approvalStatus === 'approved';
 
-  // Demo mode: show bypass UI
-  if (state.demoMode) {
+  // Quorum progress track
+  const quorumTrack = `
+    <div class="cer-quorum-track">
+      ${[0, 1].map(i => {
+        const done   = count > i;
+        const active = count === i && !isApproved;
+        return `
+          <div class="cer-quorum-node ${done ? 'done' : active ? 'active' : 'wait'}">
+            <div class="cer-quorum-dot">
+              ${done
+                ? `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6l2.5 2.5 5.5-5" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+                : `<span>${i + 1}</span>`}
+            </div>
+            <span class="cer-quorum-label">Officer ${i + 1}</span>
+          </div>
+          ${i < 1 ? `<div class="cer-quorum-line ${count > 0 ? 'done' : ''}"></div>` : ''}`;
+      }).join('')}
+      <div class="cer-quorum-line ${isApproved ? 'done' : ''}"></div>
+      <div class="cer-quorum-node ${isApproved ? 'done' : 'wait'}">
+        <div class="cer-quorum-dot">
+          ${isApproved
+            ? `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M2 6l2.5 2.5 5.5-5" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+            : `<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M5 2v3l2 2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/><circle cx="5" cy="5" r="4" stroke="currentColor" stroke-width="1.2"/></svg>`}
+        </div>
+        <span class="cer-quorum-label">Ready</span>
+      </div>
+    </div>`;
+
+  // Compact meta row
+  const metaRow = state.approvalId ? `
+    <div class="cer-approve-meta-row">
+      <div class="cer-meta-chip">
+        <span class="cer-meta-chip-label">REQUEST</span>
+        <span class="cer-meta-chip-value mono">${state.approvalId.slice(0, 13)}…</span>
+      </div>
+      <div class="cer-meta-chip">
+        <span class="cer-meta-chip-label">INITIATED BY</span>
+        <span class="cer-meta-chip-value">${state.approvalRequestedBy || '—'}</span>
+      </div>
+    </div>` : '';
+
+  if (isApproved) {
     return `
       <div class="cer-approve">
-        <div class="cer-connect-success" style="margin-bottom:16px">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#22C55E" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#22C55E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          <div>
-            <div class="cer-connect-success-title">Demo Mode — Officer Approval Bypassed</div>
-            <div class="cer-connect-success-sub">2 of 2 approvals auto-granted · ID: ${state.approvalId || 'demo-request-0001'}</div>
+        ${quorumTrack}
+        ${metaRow}
+        <div class="cer-approve-success-card">
+          <div class="cer-approve-success-icon">
+            <svg width="28" height="28" viewBox="0 0 28 28" fill="none">
+              <circle cx="14" cy="14" r="12" fill="rgba(16,185,129,0.12)" stroke="#10B981" stroke-width="1.5"/>
+              <path d="M8 14l4 4 8-8" stroke="#10B981" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
           </div>
-        </div>
-        <div style="font-size:12px;color:var(--text-tertiary);line-height:1.6">
-          In production: two independent officers log in sequentially and each approve this request before entropy generation can begin.
+          <div class="cer-approve-success-title">${state.demoMode ? 'Quorum bypassed for demo' : 'Both officers have approved'}</div>
+          <div class="cer-approve-success-sub">${state.demoMode ? '1-of-1 Shamir · single-operator demo mode' : 'Entropy generation is now authorised'}</div>
         </div>
       </div>`;
   }
 
   return `
     <div class="cer-approve">
-      <div class="cer-approval-badge-row">
-        <div class="cer-approval-badge ${isApproved ? 'cer-approval-badge-done' : ''}">
-          ${isApproved
-            ? `<svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="7" stroke="#22C55E" stroke-width="1.5"/><path d="M5.5 9l2.5 2.5 5-5" stroke="#22C55E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-               <span style="color:var(--emerald)">Approval complete</span>`
-            : `<svg width="18" height="18" viewBox="0 0 18 18" fill="none"><circle cx="9" cy="9" r="7" stroke="#F59E0B" stroke-width="1.5"/><path d="M9 6v4M9 11.5v.5" stroke="#F59E0B" stroke-width="1.5" stroke-linecap="round"/></svg>
-               <span style="color:#F59E0B">${count} of 2 approvals received</span>`}
+      ${quorumTrack}
+      ${metaRow}
+
+      <!-- Login card -->
+      <div class="cer-approve-login-card">
+        <div class="cer-approve-login-header">
+          <div class="cer-approve-login-num">${count + 1}</div>
+          <div>
+            <div class="cer-approve-login-title">Officer ${count + 1} — Authenticate to approve</div>
+            <div class="cer-approve-login-sub">Log in with officer or admin credentials</div>
+          </div>
         </div>
-      </div>
 
-      ${state.approvalId ? `
-        <div class="cer-approve-meta">
-          <div class="cer-meta-item">
-            <div class="cer-meta-label">Request ID</div>
-            <div class="cer-meta-value" style="font-family:monospace;font-size:11px">${state.approvalId}</div>
-          </div>
-          <div class="cer-meta-item">
-            <div class="cer-meta-label">Requested By</div>
-            <div class="cer-meta-value">${state.approvalRequestedBy}</div>
-          </div>
-        </div>` : ''}
-
-      ${!isApproved ? `
-        <div class="cer-form-group" style="margin-top:20px">
-          <label class="cer-form-label">Officer ${count + 1} &mdash; Please log in to approve</label>
+        <div class="cer-approve-login-fields">
           <input class="cer-connect-input" id="officer-username" type="text"
             placeholder="Username"
-            value="${state.officerLoginUsername}" autocomplete="username" autocorrect="off" autocapitalize="off"
-            style="margin-bottom:8px">
+            value="${state.officerLoginUsername}" autocomplete="username" autocorrect="off" autocapitalize="off">
           <input class="cer-connect-input" id="officer-password" type="password"
-            placeholder="Password"
-            autocomplete="current-password">
+            placeholder="Password" autocomplete="current-password">
+
           ${state.officerLoginError ? `
-            <div class="cer-connect-error" style="margin-top:8px">
+            <div class="cer-connect-error">
               <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="var(--red)" stroke-width="1.5"/><path d="M5 5l4 4M9 5l-4 4" stroke="var(--red)" stroke-width="1.2" stroke-linecap="round"/></svg>
               <span>${state.officerLoginError}</span>
             </div>` : ''}
-        </div>
-        <div class="cer-initiate-action">
-          <button class="btn btn-primary" id="officer-login-approve-btn" ${state.officerLoginLoading ? 'disabled' : ''}>
+
+          <button class="btn btn-primary cer-approve-submit-btn" id="officer-login-approve-btn" ${state.officerLoginLoading ? 'disabled' : ''}>
             ${state.officerLoginLoading
-              ? `<div class="cer-spinner-sm" style="width:14px;height:14px;border-width:2px"></div> Approving\u2026`
-              : `Approve as Officer
-                 <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7l3.5 3.5 6.5-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>`}
+              ? `<div class="cer-spinner-sm" style="width:14px;height:14px;border-width:2px"></div> Verifying…`
+              : `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="2" y="6" width="10" height="7" rx="1.5" stroke="currentColor" stroke-width="1.3"/><path d="M5 6V4a3 3 0 016 0v2" stroke="currentColor" stroke-width="1.3" stroke-linecap="round"/></svg>
+                 Approve as Officer`}
           </button>
-        </div>` : `
-        <div class="cer-connect-success" style="margin-top:20px">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#22C55E" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#22C55E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+      </div>
+
+      <!-- Bypass quorum -->
+      <div class="cer-bypass-section">
+        <div class="cer-bypass-divider"><span>or</span></div>
+        <div class="cer-bypass-row">
           <div>
-            <div class="cer-connect-success-title">Both officers have approved</div>
-            <div class="cer-connect-success-sub">Click Continue to generate entropy</div>
+            <div style="font-size:12px;font-weight:500;color:var(--text-secondary)">Running a single-operator demo?</div>
+            <div style="font-size:11px;color:var(--text-tertiary);margin-top:2px">Real HSM · real entropy · 1-of-1 Shamir</div>
           </div>
-        </div>`}
+          <button class="btn cer-bypass-btn" id="bypass-quorum-btn">Bypass Quorum ›</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function renderKeygen() {
+  if (state.keygenDone) {
+    return `
+      <div class="cer-keygen">
+        <div class="cer-keygen-success">
+          <div class="cer-keygen-success-icon">
+            <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+              <circle cx="20" cy="20" r="17" stroke="#22C55E" stroke-width="1.5" opacity="0.3"/>
+              <circle cx="20" cy="20" r="17" stroke="#22C55E" stroke-width="1.5"/>
+              <path d="M13 20l5 5 10-10" stroke="#22C55E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <div class="cer-keygen-success-title">Master Wrap Key Generated</div>
+          <div class="cer-keygen-success-sub">Sealed inside the HSM. Never exposed in plaintext.</div>
+          <div class="cer-keygen-key-info">
+            <div class="cer-keygen-key-row">
+              <span class="cer-keygen-key-dot" style="background:#22C55E"></span>
+              <code class="cer-keygen-key-label-val">${state.wrapKeyLabel || 'blue:wrap:v1'}</code>
+              <span class="cer-keygen-key-algo">AES-256 · CKA_EXTRACTABLE=false</span>
+            </div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  return `
+    <div class="cer-keygen">
+      <div class="cer-keygen-callout">
+        <div class="cer-keygen-callout-icon">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+            <path d="M9 2a4 4 0 0 1 4 4v2H5V6a4 4 0 0 1 4-4z" stroke="#3B82F6" stroke-width="1.4"/>
+            <rect x="3" y="8" width="12" height="8" rx="2" stroke="#3B82F6" stroke-width="1.4"/>
+            <circle cx="9" cy="12" r="1.2" fill="#3B82F6"/>
+          </svg>
+        </div>
+        <div>
+          <div class="cer-keygen-callout-title">FIPS 140-3 Level 3 Key Generation</div>
+          <div class="cer-keygen-callout-sub">
+            The following key will be generated entirely inside the Luna HSM via
+            <code>C_GenerateKey</code>. No key material will ever cross the HSM boundary.
+            Wallet private keys will be wrapped with this key and stored in the database as
+            AES-256 ciphertext — unwrapped into the HSM only during transaction signing.
+          </div>
+        </div>
+      </div>
+
+      <div class="cer-keygen-keys">
+        <div class="cer-keygen-key-card">
+          <div class="cer-keygen-key-card-header">
+            <div class="cer-keygen-key-card-name">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1.5a2.5 2.5 0 0 1 2.5 2.5v1.5H4.5V4A2.5 2.5 0 0 1 7 1.5z" stroke="var(--blue-400)" stroke-width="1.2"/><rect x="2" y="5" width="10" height="7.5" rx="1.5" stroke="var(--blue-400)" stroke-width="1.2"/><circle cx="7" cy="8.5" r="1" fill="var(--blue-400)"/></svg>
+              Master Wrap Key
+            </div>
+            <span class="cer-keygen-key-badge">blue:wrap:v1</span>
+          </div>
+          <div class="cer-keygen-key-attrs">
+            <div class="cer-keygen-attr"><span class="cer-keygen-attr-k">Algorithm</span><span class="cer-keygen-attr-v">AES-256</span></div>
+            <div class="cer-keygen-attr"><span class="cer-keygen-attr-k">CKA_SENSITIVE</span><span class="cer-keygen-attr-v emerald">true</span></div>
+            <div class="cer-keygen-attr"><span class="cer-keygen-attr-k">CKA_EXTRACTABLE</span><span class="cer-keygen-attr-v red">false</span></div>
+            <div class="cer-keygen-attr"><span class="cer-keygen-attr-k">CKA_WRAP</span><span class="cer-keygen-attr-v emerald">true</span></div>
+            <div class="cer-keygen-attr"><span class="cer-keygen-attr-k">CKA_UNWRAP</span><span class="cer-keygen-attr-v emerald">true</span></div>
+            <div class="cer-keygen-attr"><span class="cer-keygen-attr-k">CKA_TOKEN</span><span class="cer-keygen-attr-v emerald">true — permanent</span></div>
+          </div>
+        </div>
+      </div>
+
+      ${state.keygenError ? `
+        <div class="cer-connect-error">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="var(--red)" stroke-width="1.5"/><path d="M5 5l4 4M9 5l-4 4" stroke="var(--red)" stroke-width="1.2" stroke-linecap="round"/></svg>
+          <span>${state.keygenError}</span>
+        </div>` : ''}
+
+      <button class="btn btn-primary cer-keygen-btn" id="keygen-btn"
+        ${state.keygenLoading ? 'disabled' : ''}>
+        ${state.keygenLoading
+          ? `<div class="cer-spinner-sm" style="width:14px;height:14px;border-width:2px;border-color:rgba(255,255,255,0.3);border-top-color:white"></div>
+             <span>Generating inside HSM…</span>`
+          : `<svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M7.5 1.5a3 3 0 0 1 3 3V6H4.5V4.5a3 3 0 0 1 3-3z" stroke="currentColor" stroke-width="1.4"/><rect x="2.5" y="6" width="10" height="7" rx="1.5" stroke="currentColor" stroke-width="1.4"/><circle cx="7.5" cy="9.5" r="1.2" fill="currentColor"/></svg>
+             <span>Generate Master Keys on HSM</span>`}
+      </button>
     </div>`;
 }
 
@@ -537,38 +657,61 @@ function renderShares() {
   const total = state.sharesTotal;
   const allDone = state.sharesAcknowledged >= total;
 
+  const pipTrack = `
+    <div class="cer-share-pip-track">
+      ${Array.from({length: total}, (_, i) => {
+        const done = i < state.sharesAcknowledged;
+        const active = !allDone && i === idx;
+        return `
+          <div class="cer-share-pip-wrap">
+            <div class="cer-share-pip ${done ? 'done' : active ? 'active' : 'wait'}">
+              ${done
+                ? `<svg width="11" height="11" viewBox="0 0 11 11" fill="none"><path d="M2.5 5.5l2.5 2.5 4-4" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+                : `<span>${i + 1}</span>`}
+            </div>
+            <div class="cer-share-pip-label">${done ? 'Done' : active ? 'Now' : `Share ${i + 1}`}</div>
+          </div>
+          ${i < total - 1 ? `<div class="cer-share-pip-line ${done ? 'done' : ''}"></div>` : ''}`;
+      }).join('')}
+    </div>`;
+
+  if (allDone) {
+    return `
+      <div class="cer-shares">
+        ${pipTrack}
+        <div class="cer-share-all-done">
+          <div class="cer-share-done-icon">
+            <svg width="32" height="32" viewBox="0 0 32 32" fill="none">
+              <circle cx="16" cy="16" r="14" stroke="#22C55E" stroke-width="1.5" opacity="0.3"/>
+              <circle cx="16" cy="16" r="14" stroke="#22C55E" stroke-width="1.5"/>
+              <path d="M10 16l4 4 8-8" stroke="#22C55E" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <div class="cer-share-done-title">All ${total} share${total > 1 ? 's' : ''} distributed</div>
+          <div class="cer-share-done-sub">Each custodian has recorded their share. Click Continue to seal the master key into the HSM.</div>
+        </div>
+        <div class="cer-share-security-note">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1.5L13 12H1L7 1.5Z" stroke="#F59E0B" stroke-width="1.2" stroke-linejoin="round"/><path d="M7 5.5v3M7 10v.5" stroke="#F59E0B" stroke-width="1.2" stroke-linecap="round"/></svg>
+          ${total > 1 ? `Shamir ${total > 1 ? `${state.sharesThreshold}-of-${total}` : '1-of-1'}: any ${state.sharesThreshold} of these ${total} shares can reconstruct the master key.` : 'Keep your share in a secure, offline location.'}
+          Never store all shares in the same location.
+        </div>
+      </div>`;
+  }
+
   return `
     <div class="cer-shares">
-      ${state.demoMode ? `
-        <div class="cer-demo-cta" style="margin-bottom:16px">
-          <div class="cer-demo-cta-text">
-            <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M5 2l6 5-6 5V2z" fill="#F59E0B"/></svg>
-            Demo mode — 1 share only (no quorum needed)
-          </div>
-        </div>` : ''}
-      <div class="cer-shares-progress">
-        ${Array.from({length: total}, (_, i) => `
-          <div class="cer-share-pip ${i < state.sharesAcknowledged ? 'done' : i === idx ? 'active' : ''}">
-            ${i < state.sharesAcknowledged
-              ? `<svg width="10" height="10" viewBox="0 0 10 10" fill="none"><path d="M2 5l2.5 2.5 4-4" stroke="white" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`
-              : `<span>${i + 1}</span>`}
-          </div>
-        `).join('')}
-      </div>
+      ${pipTrack}
 
-      ${allDone ? `
-        <div class="cer-connect-success" style="margin:20px 0">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#22C55E" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#22C55E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          <div>
-            <div class="cer-connect-success-title">All ${total} share${total > 1 ? 's' : ''} distributed</div>
-            <div class="cer-connect-success-sub">Click Continue to proceed to reconstruction</div>
+      <div class="cer-share-card">
+        <div class="cer-share-card-header">
+          <div class="cer-share-card-badge">
+            <svg width="13" height="13" viewBox="0 0 13 13" fill="none"><rect x="1.5" y="1.5" width="10" height="10" rx="2" stroke="#F59E0B" stroke-width="1.2"/><path d="M4.5 6.5h4M6.5 4.5v4" stroke="#F59E0B" stroke-width="1.2" stroke-linecap="round"/></svg>
+            Share ${custodianNum} of ${total}
           </div>
-        </div>` : `
-        <div class="cer-share-header">
-          <div class="cer-share-title">${total > 1 ? `Custodian ${custodianNum} of ${total}` : 'Your single key share'}</div>
-          <div class="cer-share-subtitle">
+          <div class="cer-share-card-title">${total > 1 ? `Custodian ${custodianNum}` : 'Your Key Share'}</div>
+          <div class="cer-share-card-sub">
             ${total > 1
-              ? `This is share ${custodianNum}. It will not be shown again after acknowledgement.`
+              ? 'Hand this screen to Custodian ' + custodianNum + '. This share will not be displayed again after confirmation.'
               : 'Record this share securely. You will enter it in the next step to seal the master key.'}
           </div>
         </div>
@@ -576,39 +719,45 @@ function renderShares() {
         ${state.currentShareLoading ? `
           <div class="cer-share-loading">
             <div class="cer-spinner-sm"></div>
-            <span>Loading share…</span>
-          </div>` : state.currentShareError ? `
+            <span>Retrieving share from HSM…</span>
+          </div>
+        ` : state.currentShareError ? `
           <div class="cer-connect-error">
             <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="var(--red)" stroke-width="1.5"/><path d="M5 5l4 4M9 5l-4 4" stroke="var(--red)" stroke-width="1.2" stroke-linecap="round"/></svg>
             <span>${state.currentShareError}</span>
-          </div>` : state.currentShare ? `
-          <div class="cer-share-display">
-            <div class="cer-share-label">
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="2" y="2" width="10" height="10" rx="1.5" stroke="#F59E0B" stroke-width="1.2"/><path d="M5 7h4M7 5v4" stroke="#F59E0B" stroke-width="1.2" stroke-linecap="round"/></svg>
-              Share ${custodianNum} — eyes only — do not photograph
+          </div>
+        ` : state.currentShare ? `
+          <div class="cer-share-hex-block">
+            <div class="cer-share-hex-header">
+              <span class="cer-share-hex-label">Key Share — Confidential</span>
+              <button class="cer-share-copy-btn" id="copy-share-btn" type="button">
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="4" y="4" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M2 8V2h6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                Copy
+              </button>
             </div>
-            <pre class="cer-share-hex">${formatShareHex(state.currentShare)}</pre>
+            <pre class="cer-share-hex" id="share-hex-display">${formatShareHex(state.currentShare)}</pre>
           </div>
 
-          <div class="cer-share-confirm-row">
-            <div class="cer-form-group">
-              <label class="cer-form-label" for="custodian-name">
-                Custodian ${custodianNum} — enter your name to confirm you have recorded this share
-              </label>
-              <input class="cer-connect-input" id="custodian-name" type="text"
-                placeholder="Your name"
-                value="${state.custodianNameInput}" autocomplete="off">
-            </div>
-            <button class="btn btn-primary" id="ack-share-btn" style="margin-top:12px">
+          <div class="cer-share-confirm-section">
+            <label class="cer-form-label" for="custodian-name">
+              Custodian ${custodianNum} — type your name to confirm you've recorded this share
+            </label>
+            <input class="cer-connect-input" id="custodian-name" type="text"
+              placeholder="Full name"
+              value="${state.custodianNameInput || ''}" autocomplete="off">
+            <button class="btn btn-primary cer-share-ack-btn" id="ack-share-btn">
+              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7l3.5 3.5 6.5-7" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
               I have securely recorded this share
-              <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M2 7l3.5 3.5 6.5-7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
             </button>
-          </div>` : ''}
-      `}
+          </div>
+        ` : ''}
+      </div>
 
-      <div class="cer-share-warning">
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1.5L13 12H1L7 1.5Z" stroke="#F59E0B" stroke-width="1.2" stroke-linejoin="round"/><path d="M7 6v3M7 10.5v.5" stroke="#F59E0B" stroke-width="1.2" stroke-linecap="round"/></svg>
-        Shamir 3-of-5: any 3 of these 5 shares can reconstruct the master key. Keep them separate and secure.
+      <div class="cer-share-security-note">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1.5L13 12H1L7 1.5Z" stroke="#F59E0B" stroke-width="1.2" stroke-linejoin="round"/><path d="M7 5.5v3M7 10v.5" stroke="#F59E0B" stroke-width="1.2" stroke-linecap="round"/></svg>
+        ${total > 1
+          ? `Shamir ${state.sharesThreshold}-of-${total}: any ${state.sharesThreshold} of these ${total} shares can reconstruct the master key. Keep them separate and secure.`
+          : 'Keep this share in a secure, offline location. Do not store it digitally.'}
       </div>
     </div>`;
 }
@@ -617,53 +766,77 @@ function renderReconstruct() {
   const inputCount = state.sharesThreshold; // 1 in demo, 3 in production
   const totalShares = state.sharesTotal;
 
+  if (state.reconstructDone) {
+    return `
+      <div class="cer-reconstruct">
+        <div class="cer-reconstruct-sealed">
+          <div class="cer-reconstruct-sealed-icon">
+            <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+              <circle cx="24" cy="24" r="20" stroke="#22C55E" stroke-width="1.5" opacity="0.25"/>
+              <circle cx="24" cy="24" r="20" stroke="#22C55E" stroke-width="1.5"/>
+              <path d="M15 24l6 6 12-12" stroke="#22C55E" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <div class="cer-reconstruct-sealed-title">Master Key Sealed</div>
+          <div class="cer-reconstruct-sealed-sub">Non-extractable · Stored in HSM</div>
+          <div class="cer-reconstruct-sealed-id">
+            <span class="cer-reconstruct-sealed-id-label">Key ID</span>
+            <code class="cer-reconstruct-sealed-id-val">${state.masterKeyId || '—'}</code>
+          </div>
+        </div>
+      </div>`;
+  }
+
   return `
     <div class="cer-reconstruct">
-      <div class="cer-reconstruct-desc">
-        ${inputCount === 1
-          ? 'Enter your single key share to derive the BIP-32 master key and seal it into the HSM as non-extractable.'
-          : `Enter any ${inputCount} of the ${totalShares} Shamir shares to reconstruct the entropy, derive the BIP-32 master key, and seal it into the HSM as non-extractable.`}
+      <div class="cer-reconstruct-callout">
+        <div class="cer-reconstruct-callout-icon">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2a3 3 0 0 1 3 3v2H5V5a3 3 0 0 1 3-3z" stroke="#3B82F6" stroke-width="1.3"/><rect x="3" y="7" width="10" height="7" rx="1.5" stroke="#3B82F6" stroke-width="1.3"/><circle cx="8" cy="10.5" r="1" fill="#3B82F6"/></svg>
+        </div>
+        <div class="cer-reconstruct-callout-text">
+          <div class="cer-reconstruct-callout-title">
+            ${inputCount === 1 ? 'Enter your key share to seal the master key' : `Enter any ${inputCount} of ${totalShares} shares to reconstruct`}
+          </div>
+          <div class="cer-reconstruct-callout-sub">
+            ${inputCount === 1
+              ? 'The share will be used to derive the BIP-32 master key, then immediately sealed into the HSM as non-extractable. The share is cleared from memory afterwards.'
+              : `The ${inputCount} shares will reconstruct the master entropy via Shamir's Secret Sharing, derive the BIP-32 master key, and seal it into the HSM. All shares are cleared from memory after sealing.`}
+          </div>
+        </div>
       </div>
 
       <div class="cer-reconstruct-inputs">
         ${Array.from({length: inputCount}, (_, i) => `
-          <div class="cer-form-group">
-            <label class="cer-form-label" for="reconstruct-share-${i}">${inputCount > 1 ? `Share ${i + 1}` : 'Key Share'}</label>
+          <div class="cer-reconstruct-share-field">
+            <div class="cer-reconstruct-share-label">
+              <div class="cer-reconstruct-share-num">${i + 1}</div>
+              <label class="cer-form-label" for="reconstruct-share-${i}">
+                ${inputCount > 1 ? `Share ${i + 1}` : 'Key Share'}
+              </label>
+            </div>
             <textarea class="cer-share-textarea" id="reconstruct-share-${i}"
-              rows="3" placeholder="Paste hex share here…"
+              rows="4" placeholder="Paste hex share here — spaces and line breaks are fine…"
               spellcheck="false" autocomplete="off">${state.reconstructShares[i] || ''}</textarea>
           </div>
         `).join('')}
       </div>
 
       ${state.reconstructError ? `
-        <div class="cer-connect-error" style="margin-top:12px">
+        <div class="cer-connect-error">
           <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="var(--red)" stroke-width="1.5"/><path d="M5 5l4 4M9 5l-4 4" stroke="var(--red)" stroke-width="1.2" stroke-linecap="round"/></svg>
           <span>${state.reconstructError}</span>
         </div>` : ''}
 
-      ${state.reconstructDone ? `
-        <div class="cer-connect-success" style="margin-top:12px">
-          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="6" stroke="#22C55E" stroke-width="1.5"/><path d="M5 8l2 2 4-4" stroke="#22C55E" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
-          <div>
-            <div class="cer-connect-success-title">Master key sealed into HSM</div>
-            <div class="cer-connect-success-sub">ID: ${state.masterKeyId || '—'}</div>
-          </div>
-        </div>` : ''}
+      <button class="btn btn-primary cer-reconstruct-seal-btn" id="reconstruct-btn"
+        ${state.reconstructLoading ? 'disabled' : ''}>
+        ${state.reconstructLoading
+          ? `<div class="cer-spinner-sm" style="width:14px;height:14px;border-width:2px;border-color:rgba(255,255,255,0.3);border-top-color:white"></div><span>Sealing into HSM…</span>`
+          : `<svg width="15" height="15" viewBox="0 0 15 15" fill="none"><path d="M7.5 2a3 3 0 0 1 3 3v1.5H4.5V5a3 3 0 0 1 3-3z" stroke="currentColor" stroke-width="1.4"/><rect x="2.5" y="6.5" width="10" height="6" rx="1.5" stroke="currentColor" stroke-width="1.4"/><circle cx="7.5" cy="9.5" r="1" fill="currentColor"/></svg><span>Seal into HSM</span>`}
+      </button>
 
-      <div class="cer-reconstruct-action">
-        <button class="btn btn-primary" id="reconstruct-btn"
-          ${state.reconstructLoading || state.reconstructDone ? 'disabled' : ''}>
-          ${state.reconstructLoading
-            ? `<div class="cer-spinner-sm" style="width:14px;height:14px;border-width:2px"></div> Sealing into HSM…`
-            : 'Seal into HSM'}
-          ${!state.reconstructLoading ? `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M10 2l2 5-9 5V7l7-5z" stroke="currentColor" stroke-width="1.3" stroke-linejoin="round"/></svg>` : ''}
-        </button>
-      </div>
-
-      <div class="cer-share-warning" style="margin-top:16px">
-        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1.5L13 12H1L7 1.5Z" stroke="#F59E0B" stroke-width="1.2" stroke-linejoin="round"/><path d="M7 6v3M7 10.5v.5" stroke="#F59E0B" stroke-width="1.2" stroke-linecap="round"/></svg>
-        Once sealed, the master private key is non-extractable. Shares are cleared from memory after this step.
+      <div class="cer-share-security-note">
+        <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><path d="M7 1.5L13 12H1L7 1.5Z" stroke="#F59E0B" stroke-width="1.2" stroke-linejoin="round"/><path d="M7 5.5v3M7 10v.5" stroke="#F59E0B" stroke-width="1.2" stroke-linecap="round"/></svg>
+        Once sealed, the master private key is non-extractable and cannot be exported from the HSM. Shares are wiped from memory immediately after sealing.
       </div>
     </div>`;
 }
@@ -780,16 +953,9 @@ export function renderCeremony() {
     <div class="cer-root">
 
       ${state.demoMode ? `
-        <div class="cer-demo-banner">
-          <div class="cer-demo-banner-inner">
-            <div class="cer-demo-banner-left">
-              <span class="cer-demo-badge">🎬 DEMO MODE</span>
-              <span class="cer-demo-banner-msg">Security checks bypassed for demonstration. Not for production use.</span>
-            </div>
-            <div class="cer-demo-banner-detail">
-              <strong>Production flow:</strong> real HSM · dual-officer sequential login · Shamir 3-of-5 physical key shares
-            </div>
-          </div>
+        <div class="cer-demo-step-indicator">
+          <span class="cer-demo-badge">🎬 DEMO MODE</span>
+          <span style="font-size:12px;color:var(--text-tertiary)">Single-operator · 1-of-1 Shamir</span>
         </div>` : ''}
 
       <div class="cer-stepper">
@@ -831,27 +997,22 @@ export function renderCeremony() {
 
 function renderStep() {
   switch (STEPS[state.step].id) {
-    case 'connect':     return renderConnect();
-    case 'initiate':    return renderInitiate();
-    case 'approve':     return renderApprove();
-    case 'entropy':     return renderEntropy();
-    case 'shares':      return renderShares();
-    case 'reconstruct': return renderReconstruct();
-    case 'accounts':    return renderAccounts();
-    case 'complete':    return renderComplete();
+    case 'connect':   return renderConnect();
+    case 'initiate':  return renderInitiate();
+    case 'approve':   return renderApprove();
+    case 'keygen':    return renderKeygen();
+    case 'accounts':  return renderAccounts();
+    case 'complete':  return renderComplete();
     default: return '';
   }
 }
 
 function nextDisabled() {
   const id = STEPS[state.step].id;
-  if (id === 'connect')     return !state.hsmConnected;
-  if (id === 'initiate')    return false; // Continue handles validation + submit
-  // approve: in demo mode, the initiate step already auto-approves
-  if (id === 'approve')     return state.approvalStatus !== 'approved';
-  if (id === 'entropy')     return !state.entropyDone;
-  if (id === 'shares')      return state.sharesAcknowledged < state.sharesTotal;
-  if (id === 'reconstruct') return !state.reconstructDone;
+  if (id === 'connect')  return !state.hsmConnected;
+  if (id === 'initiate') return false;
+  if (id === 'approve')  return state.approvalStatus !== 'approved';
+  if (id === 'keygen')   return !state.keygenDone;
   return false;
 }
 
@@ -945,15 +1106,16 @@ async function startEntropyFromHsm() {
 
   } catch (err) {
     clearInterval(state.entropyInterval);
-    state.entropyError = err.message || 'HSM entropy generation failed';
-    const linesEl = lines();
-    if (linesEl) {
-      const line = document.createElement('div');
-      line.className = 'cer-log-line';
-      line.style.color = 'var(--red)';
-      line.textContent = 'ERROR: ' + state.entropyError;
-      linesEl.appendChild(line);
+    // Format known PKCS#11 error codes into helpful messages
+    let msg = err.message || 'HSM entropy generation failed';
+    if (msg.includes('CKR_PIN_EXPIRED')) {
+      msg = 'CKR_PIN_EXPIRED — The HSM partition PIN has expired. Go to Health → Change PIN to reset it directly from this dashboard, then retry.';
+    } else if (msg.includes('CKR_USER_NOT_LOGGED_IN')) {
+      msg = 'CKR_USER_NOT_LOGGED_IN — Authentication lost. Reconnect the HSM and retry.';
     }
+    state.entropyError = msg;
+    // Rebuild so the Continue button is correctly disabled
+    rebuildCeremony();
   }
 }
 
@@ -988,7 +1150,6 @@ async function finishCeremony() {
 // ─── Navigation ───────────────────────────────────────────────────────────────
 
 function transition(direction) {
-  clearInterval(state.entropyInterval);
   const card = document.getElementById('cer-card');
   if (!card) return;
   card.classList.add(direction === 'next' ? 'slide-out-left' : 'slide-out-right');
@@ -1000,7 +1161,6 @@ function transition(direction) {
 }
 
 function rebuildCeremony() {
-  clearInterval(state.entropyInterval);
   const root = document.querySelector('.cer-root');
   if (!root) return;
 
@@ -1037,19 +1197,12 @@ function initCeremonyHandlers(root) {
         nextBtn.disabled = true;
         nextBtn.textContent = 'Submitting\u2026';
         try {
-          // Initiate is always real
+          // Initiate is always real — approval handled at Step 3
           const initiated = await api.initiateCeremony({ reason: state.approvalReason });
           state.approvalId          = initiated.id;
           state.approvalStatus      = initiated.status;
           state.approvalCount       = initiated.approvals.length;
           state.approvalRequestedBy = initiated.requestedByDisplay || '';
-
-          // In demo mode: immediately auto-approve (no second person needed)
-          if (state.demoMode) {
-            const approved = await api.demoApprove(initiated.id);
-            state.approvalStatus = approved.status;
-            state.approvalCount  = approved.approvals.length;
-          }
         } catch (err) {
           nextBtn.disabled = false;
           nextBtn.textContent = 'Continue \u2192';
@@ -1072,13 +1225,10 @@ function initCeremonyHandlers(root) {
   }
 
   // Step-specific setup
-  if (stepId === 'connect')     attachConnectHandlers(root);
-  // initiate step: submission handled by Continue in nextBtn above
-  if (stepId === 'approve')     attachApproveHandlers(root);
-  if (stepId === 'entropy')     startEntropyFromHsm();
-  if (stepId === 'shares')      attachShareHandlers(root);
-  if (stepId === 'reconstruct') attachReconstructHandlers(root);
-  if (stepId === 'accounts')    attachAccountHandlers(root);
+  if (stepId === 'connect')  attachConnectHandlers(root);
+  if (stepId === 'approve')  attachApproveHandlers(root);
+  if (stepId === 'keygen')   attachKeygenHandlers(root);
+  if (stepId === 'accounts') attachAccountHandlers(root);
 }
 
 // ─── Connect handlers ─────────────────────────────────────────────────────────
@@ -1133,11 +1283,15 @@ async function handleHsmConnect() {
     state.hsmConnectError = null;
     rebuildCeremony();
 
-    // Fire confetti + trigger electricity animation
+    // Fire confetti + brief electricity burst, then settle to static glow
     setTimeout(fireConfetti, 100);
     setTimeout(() => {
       const ring = document.getElementById('electric-ring');
-      if (ring) ring.classList.add('cer-electric-active');
+      if (ring) {
+        ring.classList.add('cer-electric-active');
+        // Remove after burst — only cer-electric-done remains, spin stops
+        setTimeout(() => ring.classList.remove('cer-electric-active'), 900);
+      }
     }, 200);
   } catch (err) {
     stageTimers.forEach(clearTimeout);
@@ -1150,12 +1304,6 @@ async function handleHsmConnect() {
 }
 
 function attachConnectHandlers(root) {
-  // Demo mode button
-  const demoBtn = root.querySelector('#demo-mode-btn');
-  if (demoBtn) {
-    demoBtn.addEventListener('click', activateDemoMode);
-  }
-
   root.querySelectorAll('.cer-vendor-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const key = btn.dataset.preset;
@@ -1267,9 +1415,65 @@ function attachApproveHandlers(root) {
   if (approveBtn) {
     approveBtn.addEventListener('click', doOfficerApprove);
   }
+
+  // Bypass Quorum button (demo mode)
+  const bypassBtn = root.querySelector('#bypass-quorum-btn');
+  if (bypassBtn) {
+    bypassBtn.addEventListener('click', async () => {
+      bypassBtn.disabled = true;
+      bypassBtn.textContent = 'Bypassing…';
+      state.demoMode = true;
+      try {
+        const approved = await api.demoApprove(state.approvalId);
+        state.approvalStatus = approved.status;
+        state.approvalCount  = approved.approvals.length;
+      } catch (err) {
+        state.demoMode = false;
+        alert('Bypass failed: ' + (err.message || 'Unknown error'));
+        bypassBtn.disabled = false;
+        bypassBtn.textContent = 'Bypass Quorum ›';
+        return;
+      }
+      rebuildCeremony();
+    });
+  }
 }
 
-// ─── Share handlers ───────────────────────────────────────────────────────────
+// ─── Key generation handlers ──────────────────────────────────────────────────
+
+function attachKeygenHandlers(root) {
+  const btn = root.querySelector('#keygen-btn');
+  if (!btn) return;
+
+  btn.addEventListener('click', async () => {
+    state.keygenLoading = true;
+    state.keygenError   = null;
+    rebuildCeremony();
+
+    try {
+      const result = await api.generateMasterKeys();
+      state.keygenDone    = true;
+      state.keygenLoading = false;
+      state.wrapKeyLabel  = result.wrapKeyLabel || 'blue:wrap:v1';
+      rebuildCeremony();
+
+      // Auto-advance after a brief success display
+      setTimeout(() => transition('next'), 1600);
+    } catch (err) {
+      let msg = err.message || 'Key generation failed';
+      if (msg.includes('CKR_PIN_EXPIRED')) {
+        msg = 'CKR_PIN_EXPIRED — HSM PIN has expired. Go to Health → Change PIN, then retry.';
+      } else if (msg.includes('not approved')) {
+        msg = 'Ceremony not approved. Complete officer approval first.';
+      }
+      state.keygenError   = msg;
+      state.keygenLoading = false;
+      rebuildCeremony();
+    }
+  });
+}
+
+// ─── Share handlers (legacy — kept for reference) ────────────────────────────
 
 function attachShareHandlers(root) {
   const ackBtn = root.querySelector('#ack-share-btn');
@@ -1299,7 +1503,7 @@ function attachShareHandlers(root) {
         state.currentShare = null;
         state.custodianNameInput = '';
 
-        if (state.currentShareIndex < 5) {
+        if (state.currentShareIndex < state.sharesTotal) {
           // Load next share
           await loadCurrentShare();
         } else {
@@ -1314,8 +1518,21 @@ function attachShareHandlers(root) {
     });
   }
 
+  // Copy share button
+  const copyBtn = root.querySelector('#copy-share-btn');
+  if (copyBtn && state.currentShare) {
+    copyBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(state.currentShare).then(() => {
+        copyBtn.textContent = 'Copied!';
+        setTimeout(() => {
+          copyBtn.innerHTML = `<svg width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="4" y="4" width="6" height="6" rx="1" stroke="currentColor" stroke-width="1.2"/><path d="M2 8V2h6" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/></svg> Copy`;
+        }, 2000);
+      }).catch(() => {});
+    });
+  }
+
   // Load the current share if not already loaded
-  if (!state.currentShare && !state.currentShareLoading && state.currentShareIndex < 5 && state.sharesAcknowledged < 5) {
+  if (!state.currentShare && !state.currentShareLoading && state.currentShareIndex < state.sharesTotal && state.sharesAcknowledged < state.sharesTotal) {
     loadCurrentShare();
   }
 }
@@ -1339,10 +1556,11 @@ function attachReconstructHandlers(root) {
   if (!sealBtn) return;
 
   sealBtn.addEventListener('click', async () => {
-    // Read current textarea values
+    // Read current textarea values — strip all whitespace (shares are formatted with spaces/newlines for display)
     const shares = Array.from({length: inputCount}, (_, i) => {
       const ta = document.getElementById(`reconstruct-share-${i}`);
-      return (ta ? ta.value.trim() : state.reconstructShares[i] || '');
+      const raw = ta ? ta.value : (state.reconstructShares[i] || '');
+      return raw.replace(/\s+/g, '');
     }).filter(s => s.length > 0);
 
     if (shares.length < inputCount) {

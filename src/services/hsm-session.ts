@@ -168,4 +168,51 @@ export class HsmSession {
   isConnected(): boolean {
     return this.loggedIn && this.session !== null;
   }
+
+  /**
+   * Change the HSM user PIN via PKCS#11 C_SetPIN.
+   * Works even when the PIN is expired (CKR_PIN_EXPIRED from C_Login).
+   * If no active session exists, opens a temporary RW session just for the change.
+   */
+  async changePin(oldPin: string, newPin: string): Promise<void> {
+    let session = this.session;
+    let ownedSession = false;
+    let ownedInit = false;
+
+    try {
+      if (!session) {
+        // Session is gone (e.g. after failed login). Re-init PKCS#11 minimally.
+        if (!this.initialized) {
+          this.pkcs11.load(this.config.pkcs11Library);
+          this.pkcs11.C_Initialize();
+          this.initialized = true;
+          ownedInit = true;
+        }
+        const slots = this.pkcs11.C_GetSlotList(true);
+        if (slots.length === 0) throw new Error('No HSM slots with tokens found');
+        const slotId = slots[this.config.slotIndex] ?? slots[0];
+        this.slotId = slotId;
+        session = this.pkcs11.C_OpenSession(
+          slotId,
+          pkcs11js.CKF_SERIAL_SESSION | pkcs11js.CKF_RW_SESSION
+        );
+        ownedSession = true;
+      }
+
+      // C_SetPIN works without being logged in when PIN is expired on Luna HSM
+      this.pkcs11.C_SetPIN(session, oldPin, newPin);
+      logger.info('HSM PIN changed successfully');
+
+      // Update stored config so the next reconnect uses the new PIN
+      this.config = { ...this.config, pin: newPin };
+
+    } finally {
+      if (ownedSession && session) {
+        try { this.pkcs11.C_CloseSession(session); } catch { /* ignore */ }
+      }
+      if (ownedInit) {
+        try { this.pkcs11.C_Finalize(); this.initialized = false; } catch { /* ignore */ }
+      }
+    }
+  }
 }

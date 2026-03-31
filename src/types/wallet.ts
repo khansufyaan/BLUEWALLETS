@@ -12,8 +12,10 @@ export interface Wallet {
   keyId: string;
   chain: Chain;
   algorithm: KeyAlgorithm;
-  address: string;        // blockchain address (derived from public key)
-  publicKey: string;       // hex
+  address: string;            // blockchain address (derived from public key)
+  publicKey: string;          // hex — not sensitive, safe to store plaintext
+  wrappedPrivateKey?: string; // "ivHex:ciphertextHex" — AES-256-CBC-PAD wrapped by blue:wrap:v1
+                              // Only unwrapped inside HSM session during C_Sign, never in app memory
   balance: bigint;
   currency: string;
   status: WalletStatus;

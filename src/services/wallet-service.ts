@@ -24,26 +24,27 @@ export class WalletService {
     const chainConfig = CHAIN_CONFIGS[req.chain];
     if (!chainConfig) throw new Error(`Unsupported chain: ${req.chain}`);
 
-    // Auto-select algorithm and currency from chain
     const algorithm = chainConfig.algorithm;
-    const currency = req.currency || chainConfig.ticker;
+    const currency  = req.currency || chainConfig.ticker;
 
-    // Generate HSM key pair
-    const keyPair = await this.kms.generateKeyPair(algorithm, `wallet-${req.chain}-${req.name}`);
-    const publicKeyHex = keyPair.publicKey.toString('hex');
+    // Generate EC keypair on HSM as session objects, wrap private key with blue:wrap:v1.
+    // The private key NEVER exists in application memory — FIPS 140-3 Level 3 compliant.
+    const { wrappedPrivateKey, publicKeyHex, keyId } =
+      await this.kms.generateAndWrapWalletKey(algorithm);
 
-    // Derive blockchain address from HSM public key
+    // Derive blockchain address from public key (public keys are not sensitive)
     const address = this.addressService.deriveAddress(publicKeyHex, req.chain);
 
     const wallet: Wallet = {
       id: uuidv4(),
       vaultId: req.vaultId || '',
       name: req.name,
-      keyId: keyPair.keyId,
+      keyId,
       chain: req.chain,
       algorithm,
       address,
       publicKey: publicKeyHex,
+      wrappedPrivateKey,             // AES-256-CBC-PAD ciphertext — safe to store in DB
       balance: BigInt(req.initialBalance || '0'),
       currency,
       status: 'active',
@@ -54,12 +55,7 @@ export class WalletService {
     };
 
     await this.walletStore.create(wallet);
-    logger.info('Wallet created', {
-      walletId: wallet.id,
-      chain: req.chain,
-      address,
-      algorithm,
-    });
+    logger.info('Wallet created', { walletId: wallet.id, chain: req.chain, address, algorithm });
     return wallet;
   }
 
@@ -123,8 +119,14 @@ export class WalletService {
 
     let signature: Buffer;
     try {
-      const signResult = await this.kms.sign(source.keyId, hash);
-      signature = signResult.signature;
+      if (source.wrappedPrivateKey) {
+        // New FIPS 140-3 Level 3 path: unwrap into HSM session, sign, destroy session key
+        signature = await this.kms.signWithWrappedKey(source.wrappedPrivateKey, source.algorithm, hash);
+      } else {
+        // Legacy path: key stored as permanent token object on HSM (pre-ceremony wallets)
+        const signResult = await this.kms.sign(source.keyId, hash);
+        signature = signResult.signature;
+      }
     } catch (error) {
       logger.error('HSM signing failed', { error, fromWalletId });
       throw new Error('Transaction signing failed');

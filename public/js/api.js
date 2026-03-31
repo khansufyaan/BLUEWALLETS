@@ -98,21 +98,19 @@ export const api = {
 
   // Key Ceremony
   getCeremonyStatus:  () => request('/ceremony/status'),
-  generateEntropy:    (demo = false) => request('/ceremony/entropy', { method: 'POST', body: JSON.stringify({ demo }) }),
-  completeCeremony:   (coinTypes) => request('/ceremony/complete', { method: 'POST', body: JSON.stringify({ coinTypes }) }),
   initiateCeremony:   (body) => request('/ceremony/initiate', { method: 'POST', body: JSON.stringify({ reason: body.reason }) }),
   approveCeremony:    (body) => request('/ceremony/approve', { method: 'POST', body: JSON.stringify({ requestId: body.requestId }) }),
   demoApprove:        (requestId) => request('/ceremony/demo-approve', { method: 'POST', body: JSON.stringify({ requestId }) }),
   cancelCeremony:     () => request('/ceremony/cancel', { method: 'POST' }),
   getApprovalStatus:  () => request('/ceremony/approval'),
-  getShare:           (index) => request(`/ceremony/shares/${index}`),
-  acknowledgeShare:   (index) => request(`/ceremony/shares/${index}/acknowledge`, { method: 'POST' }),
-  reconstructAndSeal: (shares) => request('/ceremony/reconstruct', { method: 'POST', body: JSON.stringify({ shares }) }),
+  generateMasterKeys: () => request('/ceremony/generate-keys', { method: 'POST' }),
+  completeCeremony:   (coinTypes) => request('/ceremony/complete', { method: 'POST', body: JSON.stringify({ coinTypes }) }),
 
   // HSM Configuration
   getHsmStatus:     () => request('/hsm/status'),
   connectHsm:       (params) => request('/hsm/connect', { method: 'POST', body: JSON.stringify(params) }),
   disconnectHsm:    () => request('/hsm/disconnect', { method: 'POST' }),
+  changeHsmPin:     (currentPin, newPin) => request('/hsm/change-pin', { method: 'POST', body: JSON.stringify({ currentPin, newPin }) }),
 
   // Health — service controls & logs (auth-protected)
   getServiceLogs:   (service) => request(`/health/logs?service=${encodeURIComponent(service)}`),

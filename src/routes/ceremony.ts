@@ -19,10 +19,6 @@ const completeSchema = z.object({
   coinTypes: z.array(z.string()).min(1, 'Select at least one coin type'),
 });
 
-const reconstructSchema = z.object({
-  shares: z.array(z.string()).min(3, 'At least 3 shares are required'),
-});
-
 export function createCeremonyRoutes(
   ceremonyService: CeremonyService,
   approvalService: CeremonyApprovalService,
@@ -30,10 +26,17 @@ export function createCeremonyRoutes(
 ): Router {
   const router = Router();
 
-  /**
-   * POST /api/v1/ceremony/cancel
-   * Cancel the active approval request (admin restart / dry-run cleanup).
-   */
+  /** GET /api/v1/ceremony/status */
+  router.get('/status', requireAuth(authService), (_req: Request, res: Response) => {
+    try {
+      res.json(ceremonyService.getStatus());
+    } catch (error) {
+      logger.error('Failed to get ceremony status', { error });
+      res.status(500).json({ error: 'Failed to get ceremony status' });
+    }
+  });
+
+  /** POST /api/v1/ceremony/cancel */
   router.post('/cancel', requireAuth(authService), (_req: Request, res: Response) => {
     try {
       approvalService.cancel();
@@ -44,32 +47,16 @@ export function createCeremonyRoutes(
     }
   });
 
-  /**
-   * GET /api/v1/ceremony/status
-   * Returns whether the HSM key ceremony has been completed.
-   */
-  router.get('/status', requireAuth(authService), (_req: Request, res: Response) => {
-    try {
-      const status = ceremonyService.getStatus();
-      res.json(status);
-    } catch (error) {
-      logger.error('Failed to get ceremony status', { error });
-      res.status(500).json({ error: 'Failed to get ceremony status' });
-    }
-  });
-
-  /**
-   * POST /api/v1/ceremony/initiate
-   * Start a ceremony approval request. Identity comes from the authenticated session.
-   * Body: { reason: string }
-   */
+  /** POST /api/v1/ceremony/initiate */
   router.post('/initiate', requireAuth(authService), validate(initiateSchema), (req: Request, res: Response) => {
     try {
       const { reason } = req.body as { reason: string };
-      const requestedById = req.session!.userId;
-      const requestedByDisplay = req.session!.displayName;
-      logger.info('Ceremony: initiate request', { requestedByDisplay, reason });
-      const approval = approvalService.create(requestedById, requestedByDisplay, reason);
+      const approval = approvalService.create(
+        req.session!.userId,
+        req.session!.displayName,
+        reason,
+      );
+      logger.info('Ceremony initiated', { by: req.session!.displayName, reason });
       res.json(approval);
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Failed to initiate ceremony';
@@ -78,19 +65,16 @@ export function createCeremonyRoutes(
     }
   });
 
-  /**
-   * POST /api/v1/ceremony/approve
-   * An officer approves the active ceremony request.
-   * The officer must be authenticated; identity comes from session.
-   * Body: { requestId: string }
-   */
+  /** POST /api/v1/ceremony/approve — officer approves the active request */
   router.post('/approve', requireAuth(authService), requireRole('officer', 'admin'), validate(approveSchema), (req: Request, res: Response) => {
     try {
       const { requestId } = req.body as { requestId: string };
-      const userId = req.session!.userId;
-      const displayName = req.session!.displayName;
-      logger.info('Ceremony: approval submitted', { requestId, displayName });
-      const approval = approvalService.approve(requestId, userId, displayName);
+      const approval = approvalService.approve(
+        requestId,
+        req.session!.userId,
+        req.session!.displayName,
+      );
+      logger.info('Ceremony approved', { requestId, by: req.session!.displayName });
       res.json(approval);
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Approval failed';
@@ -99,122 +83,58 @@ export function createCeremonyRoutes(
     }
   });
 
-  /**
-   * GET /api/v1/ceremony/approval
-   * Returns the current active approval request (pending or approved).
-   */
+  /** GET /api/v1/ceremony/approval */
   router.get('/approval', requireAuth(authService), (_req: Request, res: Response) => {
     try {
-      const approval = approvalService.getActive();
-      res.json(approval);
+      res.json(approvalService.getActive());
     } catch (error) {
-      logger.error('Failed to get approval status', { error });
       res.status(500).json({ error: 'Failed to get approval status' });
     }
   });
 
-  /**
-   * POST /api/v1/ceremony/entropy
-   * Generate 256-bit entropy from HSM C_GenerateRandom and split into Shamir shares.
-   * Body: { demo?: boolean } — demo=true uses 1-of-1 Shamir (single share, no quorum)
-   * Requires an approved ceremony request.
-   */
-  router.post('/entropy', requireAuth(authService), async (req: Request, res: Response) => {
-    try {
-      const demoMode = req.body?.demo === true;
-      logger.info('Ceremony: generating entropy from HSM', { demoMode });
-      const result = await ceremonyService.generateEntropy(demoMode);
-      res.json(result);
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Entropy generation failed';
-      logger.error('Entropy generation failed', { error });
-      res.status(500).json({ error: msg });
-    }
-  });
-
-  /**
-   * POST /api/v1/ceremony/demo-approve
-   * Demo-only: force-approve the active request without needing a second person.
-   * Body: { requestId: string }
-   */
+  /** POST /api/v1/ceremony/demo-approve — bypass quorum for testing */
   router.post('/demo-approve', requireAuth(authService), (req: Request, res: Response) => {
     try {
       const { requestId } = req.body as { requestId: string };
       if (!requestId) { res.status(400).json({ error: 'requestId is required' }); return; }
-      logger.info('Ceremony: demo-approve requested', { requestId });
       const approval = approvalService.demoApprove(requestId);
+      logger.info('Ceremony demo-approved', { requestId });
       res.json(approval);
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Demo approval failed';
-      logger.error('Demo approval failed', { error });
       res.status(400).json({ error: msg });
     }
   });
 
   /**
-   * GET /api/v1/ceremony/shares/:index
-   * Retrieve a single Shamir share by index (0-based).
-   * Returns: { shareHex: string, index: number, total: 5 }
+   * POST /api/v1/ceremony/generate-keys
+   *
+   * THE core ceremony step — replaces entropy/shares/reconstruct.
+   *
+   * Generates blue:wrap:v1 (AES-256) inside the Luna HSM via C_GenerateKey.
+   *   CKA_SENSITIVE=true, CKA_EXTRACTABLE=false  — never exits HSM in plaintext
+   *   CKA_WRAP=true, CKA_UNWRAP=true             — wraps/unwraps wallet EC private keys
+   *
+   * Every wallet created after this point has its EC private key wrapped with this
+   * key and stored as AES-256 ciphertext in the database. The private key only
+   * re-enters the HSM session briefly during C_Sign, then is destroyed.
+   *
+   * FIPS 140-3 Level 3 compliant.
+   * Requires an approved ceremony request.
    */
-  router.get('/shares/:index', requireAuth(authService), (req: Request, res: Response) => {
+  router.post('/generate-keys', requireAuth(authService), async (_req: Request, res: Response) => {
     try {
-      const index = parseInt(req.params.index, 10);
-      if (isNaN(index)) {
-        res.status(400).json({ error: 'Invalid share index' });
-        return;
-      }
-      const shareHex = ceremonyService.getShare(index);
-      res.json({ shareHex, index, total: 5 });
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Failed to get share';
-      logger.error('Get share failed', { error });
-      res.status(400).json({ error: msg });
-    }
-  });
-
-  /**
-   * POST /api/v1/ceremony/shares/:index/acknowledge
-   * Mark a Shamir share as acknowledged by its custodian.
-   */
-  router.post('/shares/:index/acknowledge', requireAuth(authService), (req: Request, res: Response) => {
-    try {
-      const index = parseInt(req.params.index, 10);
-      if (isNaN(index)) {
-        res.status(400).json({ error: 'Invalid share index' });
-        return;
-      }
-      ceremonyService.acknowledgeShare(index);
-      res.json({ acknowledged: true, index });
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Failed to acknowledge share';
-      logger.error('Acknowledge share failed', { error });
-      res.status(400).json({ error: msg });
-    }
-  });
-
-  /**
-   * POST /api/v1/ceremony/reconstruct
-   * Reconstruct the master key from 3+ Shamir shares and seal into HSM.
-   * Body: { shares: string[] } (array of hex-encoded share strings)
-   */
-  router.post('/reconstruct', requireAuth(authService), validate(reconstructSchema), async (req: Request, res: Response) => {
-    try {
-      const { shares } = req.body as { shares: string[] };
-      logger.info('Ceremony: reconstructing master key from shares', { shareCount: shares.length });
-      const result = await ceremonyService.reconstructAndSeal(shares);
+      logger.info('Ceremony: generating master wrap key on HSM');
+      const result = await ceremonyService.generateMasterKeys();
       res.json(result);
     } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Reconstruction failed';
-      logger.error('Reconstruct and seal failed', { error });
+      const msg = error instanceof Error ? error.message : 'Key generation failed';
+      logger.error('Master key generation failed', { error });
       res.status(500).json({ error: msg });
     }
   });
 
-  /**
-   * POST /api/v1/ceremony/complete
-   * Finalise ceremony with selected coin types.
-   * Body: { coinTypes: string[] }
-   */
+  /** POST /api/v1/ceremony/complete */
   router.post('/complete', requireAuth(authService), validate(completeSchema), (req: Request, res: Response) => {
     try {
       const { coinTypes } = req.body as { coinTypes: string[] };

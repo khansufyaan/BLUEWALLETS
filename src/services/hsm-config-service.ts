@@ -116,6 +116,28 @@ export class HsmConfigService {
     }
   }
 
+  /**
+   * Change the HSM user PIN, then automatically reconnect with the new PIN.
+   * Works when the PIN is expired (CKR_PIN_EXPIRED) — the session change is
+   * done at the PKCS#11 layer, then the service reconnects with the new PIN.
+   */
+  async changePin(oldPin: string, newPin: string): Promise<HsmConnectionStatus> {
+    logger.info('HSM PIN change requested');
+    await this.hsmSession.changePin(oldPin, newPin);
+
+    // If we had a library and slot configured, reconnect automatically
+    if (this.status.library !== null && this.status.slotIndex !== null) {
+      logger.info('Reconnecting HSM with new PIN after PIN change');
+      return this.connect({
+        pkcs11Library: this.status.library,
+        slotIndex:     this.status.slotIndex,
+        pin:           newPin,
+      });
+    }
+
+    return this.getStatus();
+  }
+
   async disconnect(): Promise<void> {
     await this.hsmSession.cleanup();
     this.status = {

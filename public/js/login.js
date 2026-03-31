@@ -369,11 +369,13 @@ function renderLoginPage(onAuthenticated) {
     errDiv.style.display = 'none';
 
     try {
-      const result = await auth.login(username, password);
-      // Brief success flash before transition
+      await auth.login(username, password);
+      // Brief success flash, then reload so the app shell DOM is intact
       btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" style="vertical-align:middle;margin-right:6px"><path d="M3 8l3.5 3.5 7-7" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Welcome back`;
       btn.style.background = 'linear-gradient(135deg, #16a34a, #15803d)';
-      setTimeout(() => onAuthenticated(result.user), 500);
+      btn.style.boxShadow  = '0 4px 20px rgba(22,163,74,0.5)';
+      // Reload: checkAuthAndRender will find the session token and boot the app
+      setTimeout(() => window.location.reload(), 600);
     } catch (err) {
       errDiv.textContent = err.message || 'Login failed. Check your credentials.';
       errDiv.style.display = 'block';

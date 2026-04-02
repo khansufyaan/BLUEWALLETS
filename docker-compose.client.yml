@@ -1,0 +1,90 @@
+# ============================================================
+# Blue Wallets — Client Deployment
+#
+# Usage:
+#   1. Generate mTLS certificates:  ./certs/generate-certs.sh
+#   2. Create .env file (see below)
+#   3. Start:  docker compose -f docker-compose.client.yml up -d
+#   4. Open Blue Driver:  http://localhost:3100  (Key Ceremony)
+#   5. Open Blue Console: http://localhost:3400  (Operations)
+#
+# Required .env file:
+#   POSTGRES_PASSWORD=<strong-password>
+#   INTERNAL_AUTH_KEY=<random-64-char-string>
+#   ETH_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/<your-key>
+# ============================================================
+
+services:
+  # ─── PostgreSQL (Secure Zone) ────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: bluewallets
+      POSTGRES_USER: blue
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U blue -d bluewallets"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  # ─── Blue Driver (Secure Zone — No Internet) ────────────────
+  blue-driver:
+    image: ghcr.io/khansufyaan/blue-driver:latest
+    ports:
+      - "3100:3100"          # Driver dashboard (admin only)
+      - "3200:3200"          # Internal API (mTLS)
+    environment:
+      - PORT=3100
+      - INTERNAL_PORT=3200
+      - NODE_ENV=production
+      - MTLS_ENABLED=true
+      - INTERNAL_AUTH_KEY=${INTERNAL_AUTH_KEY}
+      - DATABASE_URL=postgresql://blue:${POSTGRES_PASSWORD}@postgres:5432/bluewallets
+    volumes:
+      - ./certs:/app/certs:ro
+    networks:
+      - internal
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ─── Blue Console (DMZ — Internet Access) ────────────────────
+  blue-console:
+    image: ghcr.io/khansufyaan/blue-console:latest
+    ports:
+      - "3300:3100"          # Bank-facing API
+      - "3400:3400"          # Ops dashboard
+    environment:
+      - PORT=3100
+      - SIGNER_URL=https://blue-driver:3200
+      - INTERNAL_AUTH_KEY=${INTERNAL_AUTH_KEY}
+      - CERTS_DIR=/app/certs
+      - ETH_RPC_URL=${ETH_RPC_URL:-https://eth-sepolia.g.alchemy.com/v2/demo}
+      - ETH_CHAIN_ID=${ETH_CHAIN_ID:-11155111}
+      - DEPOSIT_POLL_MS=15000
+      - WEBHOOK_URL=${WEBHOOK_URL:-}
+    volumes:
+      - ./certs:/app/certs:ro
+    networks:
+      - internal
+      - internet
+    depends_on:
+      blue-driver:
+        condition: service_started
+    restart: unless-stopped
+
+networks:
+  internal:
+    driver: bridge
+  internet:
+    driver: bridge
+
+volumes:
+  pgdata:

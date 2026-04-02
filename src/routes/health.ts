@@ -6,17 +6,45 @@ import { logger } from '../utils/logger';
 // ── Service restart state (lightweight toggle simulation) ─────────────────────
 const serviceLastRestart: Record<string, Date> = {};
 
-export function createHealthRoutes(hsmSession: HsmSession): Router {
+// ── Console heartbeat tracking ────────────────────────────────────────────────
+let lastConsoleHeartbeat: { lastPingAt: Date; consoleId?: string } | null = null;
+const CONSOLE_TIMEOUT_S = 60;
+
+export function createHealthRoutes(hsmSession: HsmSession, dbType?: 'postgresql' | 'in-memory'): Router {
   const router = Router();
 
   // ── Public health check (no auth) ─────────────────────────────────────────
-  router.get('/', (_req: Request, res: Response) => {
+  router.get('/', (req: Request, res: Response) => {
+    // Track Console heartbeat from X-Blue-Console header
+    if (req.headers['x-blue-console']) {
+      lastConsoleHeartbeat = {
+        lastPingAt: new Date(),
+        consoleId: req.headers['x-blue-console'] as string,
+      };
+    }
+
     const status = hsmSession.getStatus();
     res.status(status.connected ? 200 : 503).json({
-      service:   'waas-kms',
+      service:   'blue-driver',
       status:    status.connected ? 'healthy' : 'degraded',
       hsm:       status,
+      database:  { type: dbType || 'in-memory', connected: true },
       timestamp: new Date().toISOString(),
+    });
+  });
+
+  // ── Console connection status ─────────────────────────────────────────────
+  router.get('/console-status', (_req: Request, res: Response) => {
+    if (!lastConsoleHeartbeat) {
+      res.json({ connected: false, lastPingAt: null, secondsAgo: null });
+      return;
+    }
+    const secondsAgo = Math.floor((Date.now() - lastConsoleHeartbeat.lastPingAt.getTime()) / 1000);
+    res.json({
+      connected:  secondsAgo < CONSOLE_TIMEOUT_S,
+      lastPingAt: lastConsoleHeartbeat.lastPingAt.toISOString(),
+      secondsAgo,
+      consoleId:  lastConsoleHeartbeat.consoleId,
     });
   });
 

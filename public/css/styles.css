@@ -13,19 +13,22 @@
   --blue-400: #60A5FA;
   --blue-700: #1D4ED8;
   --violet-600: #7C3AED;
+  --violet-500: #8B5CF6;
   --gradient: linear-gradient(135deg, #2563EB 0%, #7C3AED 100%);
 
   /* Surfaces */
   --bg-root: #09090B;
-  --bg-card: #18181B;
-  --bg-elevated: #27272A;
+  --bg-card: #111113;
+  --bg-elevated: #1A1A1E;
   --bg-input: #1C1C1F;
   --bg-hover: rgba(255,255,255,0.03);
+  --bg-glow: rgba(37,99,235,0.04);
 
   /* Borders */
-  --border: #2E2E33;
-  --border-hover: #3F3F46;
+  --border: rgba(255,255,255,0.06);
+  --border-hover: rgba(255,255,255,0.1);
   --border-focus: var(--blue-600);
+  --border-glow: rgba(37,99,235,0.15);
 
   /* Text */
   --text-primary: #FAFAFA;
@@ -46,6 +49,9 @@
   --sp-5: 20px; --sp-6: 24px; --sp-8: 32px; --sp-10: 40px;
   --sp-12: 48px; --sp-16: 64px;
 
+  /* Layout */
+  --content-px: var(--sp-8);
+
   /* Radii */
   --r-sm: 6px; --r-md: 8px; --r-lg: 12px; --r-xl: 16px; --r-full: 9999px;
 
@@ -54,6 +60,9 @@
   --shadow-md: 0 4px 12px rgba(0,0,0,0.25);
   --shadow-lg: 0 8px 24px rgba(0,0,0,0.3);
   --shadow-glow: 0 0 20px rgba(37,99,235,0.15);
+  --shadow-glow-lg: 0 0 40px rgba(37,99,235,0.12), 0 0 80px rgba(124,58,237,0.06);
+  --shadow-card: 0 1px 3px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.03) inset;
+  --shadow-card-hover: 0 4px 20px rgba(0,0,0,0.4), 0 0 0 1px rgba(255,255,255,0.06) inset;
 
   /* Sidebar */
   --sidebar-w: 240px;
@@ -105,7 +114,8 @@ h3 { font-size: 15px; font-weight: 600; }
 }
 
 .sidebar-brand {
-  padding: var(--sp-6);
+  height: var(--topbar-h);
+  padding: 0 var(--sp-6);
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
@@ -3262,6 +3272,73 @@ th.sort-desc::after { content: ' \25BC'; font-size: 10px; }
   gap: 12px;
 }
 
+/* ─── Ceremony: Wrapped Key Lifecycle ────────────────────── */
+.cer-lifecycle {
+  margin-top: var(--sp-6);
+  padding: var(--sp-5);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+}
+
+.cer-lifecycle-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-tertiary);
+  margin-bottom: var(--sp-4);
+}
+
+.cer-lifecycle-steps {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-4);
+}
+
+.cer-lifecycle-step {
+  display: flex;
+  gap: var(--sp-3);
+  align-items: flex-start;
+}
+
+.cer-lifecycle-num {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: rgba(37,99,235,0.12);
+  color: var(--blue-400);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.cer-lifecycle-step-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-primary);
+  margin-bottom: 2px;
+}
+
+.cer-lifecycle-step-desc {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+}
+
+.cer-lifecycle-step-desc code {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  background: rgba(37,99,235,0.08);
+  color: var(--blue-400);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
 /* ─── Responsive ─────────────────────────────────────────── */
 @media (max-width: 1024px) {
   .kpi-grid { grid-template-columns: repeat(2, 1fr); }
@@ -3437,6 +3514,8 @@ th.sort-desc::after { content: ' \25BC'; font-size: 10px; }
 .cer-checklist-done  .cer-checklist-icon { background: var(--emerald); }
 .cer-checklist-active .cer-checklist-icon { background: var(--blue-600); }
 .cer-checklist-wait   .cer-checklist-icon { background: var(--bg-elevated); border: 1px solid var(--border); }
+.cer-checklist-error  .cer-checklist-icon { background: rgba(239,68,68,0.15); }
+.cer-checklist-error { color: var(--red); }
 
 /* ═══════════════════════════════════════════════════════════
    HSM CONNECTED HERO (Apple-style)

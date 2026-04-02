@@ -98,13 +98,7 @@ export const api = {
 
   // Key Ceremony
   getCeremonyStatus:  () => request('/ceremony/status'),
-  initiateCeremony:   (body) => request('/ceremony/initiate', { method: 'POST', body: JSON.stringify({ reason: body.reason }) }),
-  approveCeremony:    (body) => request('/ceremony/approve', { method: 'POST', body: JSON.stringify({ requestId: body.requestId }) }),
-  demoApprove:        (requestId) => request('/ceremony/demo-approve', { method: 'POST', body: JSON.stringify({ requestId }) }),
-  cancelCeremony:     () => request('/ceremony/cancel', { method: 'POST' }),
-  getApprovalStatus:  () => request('/ceremony/approval'),
   generateMasterKeys: () => request('/ceremony/generate-keys', { method: 'POST' }),
-  completeCeremony:   (coinTypes) => request('/ceremony/complete', { method: 'POST', body: JSON.stringify({ coinTypes }) }),
 
   // HSM Configuration
   getHsmStatus:     () => request('/hsm/status'),
@@ -112,7 +106,12 @@ export const api = {
   disconnectHsm:    () => request('/hsm/disconnect', { method: 'POST' }),
   changeHsmPin:     (currentPin, newPin) => request('/hsm/change-pin', { method: 'POST', body: JSON.stringify({ currentPin, newPin }) }),
 
+  // Users
+  getUsers:   () => request('/users').then(d => d.users),
+  createUser: (body) => request('/users', { method: 'POST', body: JSON.stringify(body) }),
+
   // Health — service controls & logs (auth-protected)
+  getConsoleStatus: () => request('/health/console-status'),
   getServiceLogs:   (service) => request(`/health/logs?service=${encodeURIComponent(service)}`),
   restartService:   (service) => request(`/health/services/${encodeURIComponent(service)}/restart`, { method: 'POST' }),
 };

@@ -1,23 +1,93 @@
-version: '3.8'
-
 services:
-  waas-luna:
+  # ─── PostgreSQL (Secure Zone) ────────────────────────────────────────────────
+  # Persistent storage for wallets, transactions, policies, users, audit logs.
+  # Only accessible from the internal network (Driver + Console).
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: bluewallets
+      POSTGRES_USER: blue
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-blue-dev-password}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U blue -d bluewallets"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ─── Blue Driver (Secure Zone) ──────────────────────────────────────────────
+  # HSM connector — NO internet access. One-time setup, then invisible.
+  # Contains PKCS#11 interface, wrapped key storage, internal API.
+  blue-driver:
     build:
       context: .
       dockerfile: Dockerfile.luna
     platform: linux/amd64
     ports:
-      - "3100:3100"
+      - "3200:3200"          # Internal API (Console-facing, mTLS when certs present)
+      - "3100:3100"          # Driver dashboard (HSM setup only)
     environment:
       - PORT=3100
+      - INTERNAL_PORT=3200
       - NODE_ENV=production
       - LOG_LEVEL=debug
-      # HSM is configured at runtime via the ceremony wizard UI.
-      # DO NOT set HSM_PKCS11_LIB / HSM_PIN here — the user enters them
-      # in the "Connect HSM" step at http://waas-luna.orb.local:3100/#/ceremony
+      - INTERNAL_AUTH_KEY=${INTERNAL_AUTH_KEY:-blue-internal-dev-key}
+      - MTLS_ENABLED=true
+      - DATABASE_URL=postgresql://blue:${POSTGRES_PASSWORD:-blue-dev-password}@postgres:5432/bluewallets
+    volumes:
+      - ./certs:/app/certs:ro
+    networks:
+      - internal
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3100/health"]
       interval: 10s
       timeout: 5s
       retries: 5
       start_period: 30s
+
+  # ─── Blue Console (DMZ) ──────────────────────────────────────────────────────
+  # Daily operations — wallets, compliance, blockchain, policies.
+  # Single front door for bank apps and operators.
+  blue-console:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    ports:
+      - "3300:3100"          # Bank-facing API
+      - "3400:3400"          # Console dashboard
+    environment:
+      - PORT=3100
+      - SIGNER_URL=https://blue-driver:3200
+      - INTERNAL_AUTH_KEY=${INTERNAL_AUTH_KEY:-blue-internal-dev-key}
+      - LOG_LEVEL=debug
+      - CERTS_DIR=/app/certs
+      # RPC endpoints
+      - ETH_RPC_URL=${ETH_RPC_URL:-https://eth-sepolia.g.alchemy.com/v2/demo}
+      - ETH_CHAIN_ID=${ETH_CHAIN_ID:-11155111}
+      # Deposit monitoring
+      - DEPOSIT_POLL_MS=15000
+      # Webhook
+      - WEBHOOK_URL=${WEBHOOK_URL:-}
+    volumes:
+      - ./certs:/app/certs:ro
+    networks:
+      - internal
+      - internet
+    depends_on:
+      blue-driver:
+        condition: service_started
+
+networks:
+  internal:
+    driver: bridge
+  internet:
+    driver: bridge
+
+volumes:
+  pgdata:

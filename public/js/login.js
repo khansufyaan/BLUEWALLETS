@@ -1,4 +1,19 @@
-import { auth } from './api.js';
+import { auth, setSessionToken } from './api.js';
+
+// ── Base64url ↔ ArrayBuffer helpers for WebAuthn ──────────────────────────
+function base64urlToBuffer(base64url) {
+  const base64 = base64url.replace(/-/g, '+').replace(/_/g, '/');
+  const padded = base64.padEnd(base64.length + (4 - base64.length % 4) % 4, '=');
+  const binary = atob(padded);
+  return Uint8Array.from(binary, c => c.charCodeAt(0)).buffer;
+}
+
+function bufferToBase64url(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  bytes.forEach(b => binary += String.fromCharCode(b));
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
 
 export async function checkAuthAndRender(onAuthenticated) {
   const meResult = await auth.me();
@@ -312,24 +327,49 @@ function renderLoginPage(onAuthenticated) {
         <div class="login-divider"></div>
 
         <div class="login-heading">Sign in</div>
-        <div class="login-subheading">Authenticate to access your secure vault</div>
+        <div class="login-subheading">Authenticate to access the Blue Driver</div>
 
         <div class="login-error" id="login-error"></div>
 
-        <div class="login-field">
-          <label class="login-label" for="login-username">Username</label>
-          <input id="login-username" class="login-input" type="text"
-            autocomplete="username" autocorrect="off" autocapitalize="off"
-            placeholder="Enter username">
+        <!-- Phase 1: Username -->
+        <div id="phase-username">
+          <div class="login-field">
+            <label class="login-label" for="login-username">Username</label>
+            <input id="login-username" class="login-input" type="text"
+              autocomplete="username" autocorrect="off" autocapitalize="off"
+              placeholder="Enter username">
+          </div>
+          <button id="continue-btn" class="login-btn">Continue</button>
         </div>
 
-        <div class="login-field">
-          <label class="login-label" for="login-password">Password</label>
-          <input id="login-password" class="login-input" type="password"
-            autocomplete="current-password" placeholder="••••••••">
+        <!-- Phase 2a: Passkey -->
+        <div id="phase-passkey" style="display:none;text-align:center;padding:20px 0">
+          <div style="margin-bottom:16px">
+            <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+              <circle cx="24" cy="24" r="20" stroke="rgba(37,99,235,0.3)" stroke-width="2"/>
+              <circle cx="24" cy="24" r="20" stroke="#2563EB" stroke-width="2" stroke-dasharray="4 4" class="login-passkey-ring"/>
+              <path d="M18 24h12M24 18v12" stroke="#2563EB" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <div style="font-size:15px;font-weight:600;color:white;margin-bottom:6px">Authenticating with passkey…</div>
+          <div style="font-size:12px;color:rgba(255,255,255,0.4)">Touch your security key or use biometrics</div>
+          <button id="use-password-btn" style="background:none;border:none;color:rgba(37,99,235,0.7);font-size:12px;margin-top:16px;cursor:pointer;font-family:inherit">Use password instead</button>
         </div>
 
-        <button id="login-btn" class="login-btn">Sign In</button>
+        <!-- Phase 2b: Password (shown if no passkey or user chooses password) -->
+        <div id="phase-password" style="display:none">
+          <div class="login-field">
+            <label class="login-label">Username</label>
+            <div style="font-size:14px;color:white;padding:10px 0" id="password-username-display"></div>
+          </div>
+          <div class="login-field">
+            <label class="login-label" for="login-password">Password</label>
+            <input id="login-password" class="login-input" type="password"
+              autocomplete="current-password" placeholder="••••••••">
+          </div>
+          <button id="login-btn" class="login-btn">Sign In</button>
+          <button id="back-to-username" style="background:none;border:none;color:rgba(255,255,255,0.3);font-size:12px;margin-top:10px;cursor:pointer;display:block;width:100%;text-align:center;font-family:inherit">← Back</button>
+        </div>
 
         <button class="login-hint-toggle" id="hint-toggle">Need login credentials? ›</button>
         <div class="login-hint-box" id="hint-box">
@@ -356,44 +396,167 @@ function renderLoginPage(onAuthenticated) {
     logoImg.parentElement.insertBefore(fallback, logoImg.nextSibling);
   };
 
-  const btn      = document.getElementById('login-btn');
-  const errDiv   = document.getElementById('login-error');
+  const errDiv = document.getElementById('login-error');
+  let currentUsername = '';
 
-  async function doLogin() {
-    const username = document.getElementById('login-username').value.trim();
-    const password = document.getElementById('login-password').value;
-    if (!username || !password) return;
+  function showError(msg) {
+    errDiv.textContent = msg;
+    errDiv.style.display = 'block';
+    errDiv.style.animation = 'none';
+    errDiv.offsetHeight;
+    errDiv.style.animation = '';
+  }
 
-    btn.disabled = true;
-    btn.innerHTML = `<span class="login-spinner"></span>Signing in…`;
+  function loginSuccess(btn) {
+    btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" style="vertical-align:middle;margin-right:6px"><path d="M3 8l3.5 3.5 7-7" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Welcome back`;
+    btn.style.background = 'linear-gradient(135deg, #16a34a, #15803d)';
+    btn.style.boxShadow  = '0 4px 20px rgba(22,163,74,0.5)';
+    setTimeout(() => window.location.reload(), 600);
+  }
+
+  // Phase 1: Continue button → check passkey availability
+  const continueBtn = document.getElementById('continue-btn');
+  continueBtn.addEventListener('click', async () => {
+    currentUsername = document.getElementById('login-username').value.trim();
+    if (!currentUsername) return;
+
+    continueBtn.disabled = true;
+    continueBtn.innerHTML = `<span class="login-spinner"></span>Checking…`;
     errDiv.style.display = 'none';
 
     try {
-      await auth.login(username, password);
-      // Brief success flash, then reload so the app shell DOM is intact
-      btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" fill="none" style="vertical-align:middle;margin-right:6px"><path d="M3 8l3.5 3.5 7-7" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Welcome back`;
-      btn.style.background = 'linear-gradient(135deg, #16a34a, #15803d)';
-      btn.style.boxShadow  = '0 4px 20px rgba(22,163,74,0.5)';
-      // Reload: checkAuthAndRender will find the session token and boot the app
-      setTimeout(() => window.location.reload(), 600);
+      // Check if user has a passkey
+      const res = await fetch('/auth/webauthn/login/options', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: currentUsername }),
+      });
+      const options = await res.json();
+
+      if (options.available && window.PublicKeyCredential) {
+        // User has a passkey — try WebAuthn
+        showPasskeyPhase(options);
+      } else {
+        // No passkey — show password form
+        showPasswordPhase();
+      }
+    } catch {
+      // On error, fall back to password
+      showPasswordPhase();
+    }
+    continueBtn.disabled = false;
+    continueBtn.innerHTML = 'Continue';
+  });
+
+  document.getElementById('login-username').addEventListener('keydown', e => {
+    if (e.key === 'Enter') continueBtn.click();
+  });
+
+  // Phase 2a: Passkey authentication
+  async function showPasskeyPhase(options) {
+    document.getElementById('phase-username').style.display = 'none';
+    document.getElementById('phase-passkey').style.display = 'block';
+
+    try {
+      // Convert base64url to ArrayBuffer
+      const publicKeyOptions = {
+        ...options,
+        challenge: base64urlToBuffer(options.challenge),
+        allowCredentials: (options.allowCredentials || []).map(c => ({
+          ...c,
+          id: base64urlToBuffer(c.id),
+        })),
+      };
+
+      const credential = await navigator.credentials.get({ publicKey: publicKeyOptions });
+
+      // Convert response to JSON
+      const credJson = {
+        id: credential.id,
+        rawId: bufferToBase64url(credential.rawId),
+        type: credential.type,
+        response: {
+          authenticatorData: bufferToBase64url(credential.response.authenticatorData),
+          clientDataJSON: bufferToBase64url(credential.response.clientDataJSON),
+          signature: bufferToBase64url(credential.response.signature),
+          userHandle: credential.response.userHandle ? bufferToBase64url(credential.response.userHandle) : null,
+        },
+        authenticatorAttachment: credential.authenticatorAttachment,
+        clientExtensionResults: credential.getClientExtensionResults(),
+      };
+
+      // Verify with server
+      const verifyRes = await fetch('/auth/webauthn/login/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: currentUsername, ...credJson }),
+      });
+
+      if (!verifyRes.ok) throw new Error('Passkey verification failed');
+
+      const data = await verifyRes.json();
+      auth.login = async () => data; // Override to set token
+      await auth.login(currentUsername, '');
+      // Actually set the token manually since we bypassed the real login
+      const { setSessionToken } = await import('./api.js');
+      setSessionToken(data.token);
+      loginSuccess(document.getElementById('use-password-btn') || continueBtn);
     } catch (err) {
-      errDiv.textContent = err.message || 'Login failed. Check your credentials.';
-      errDiv.style.display = 'block';
-      // Re-trigger animation on error re-show
-      errDiv.style.animation = 'none';
-      errDiv.offsetHeight; // reflow
-      errDiv.style.animation = '';
-      btn.disabled = false;
-      btn.innerHTML = 'Sign In';
+      if (err.name === 'NotAllowedError' || err.name === 'AbortError') {
+        // User cancelled — fall back to password
+        showPasswordPhase();
+      } else {
+        showError(err.message || 'Passkey authentication failed');
+        showPasswordPhase();
+      }
     }
   }
 
-  btn.addEventListener('click', doLogin);
-  document.getElementById('login-password').addEventListener('keydown', e => {
-    if (e.key === 'Enter') doLogin();
+  // Phase 2b: Password form
+  function showPasswordPhase() {
+    document.getElementById('phase-username').style.display = 'none';
+    document.getElementById('phase-passkey').style.display = 'none';
+    document.getElementById('phase-password').style.display = 'block';
+    document.getElementById('password-username-display').textContent = currentUsername;
+    setTimeout(() => document.getElementById('login-password')?.focus(), 100);
+  }
+
+  // Back button
+  document.getElementById('back-to-username')?.addEventListener('click', () => {
+    document.getElementById('phase-password').style.display = 'none';
+    document.getElementById('phase-passkey').style.display = 'none';
+    document.getElementById('phase-username').style.display = 'block';
+    errDiv.style.display = 'none';
   });
-  document.getElementById('login-username').addEventListener('keydown', e => {
-    if (e.key === 'Enter') document.getElementById('login-password').focus();
+
+  // Use password button (from passkey phase)
+  document.getElementById('use-password-btn')?.addEventListener('click', () => {
+    showPasswordPhase();
+  });
+
+  // Password login
+  const loginBtn = document.getElementById('login-btn');
+  async function doPasswordLogin() {
+    const password = document.getElementById('login-password').value;
+    if (!currentUsername || !password) return;
+
+    loginBtn.disabled = true;
+    loginBtn.innerHTML = `<span class="login-spinner"></span>Signing in…`;
+    errDiv.style.display = 'none';
+
+    try {
+      await auth.login(currentUsername, password);
+      loginSuccess(loginBtn);
+    } catch (err) {
+      showError(err.message || 'Login failed');
+      loginBtn.disabled = false;
+      loginBtn.innerHTML = 'Sign In';
+    }
+  }
+
+  if (loginBtn) loginBtn.addEventListener('click', doPasswordLogin);
+  document.getElementById('login-password')?.addEventListener('keydown', e => {
+    if (e.key === 'Enter') doPasswordLogin();
   });
 
   // Hint toggle

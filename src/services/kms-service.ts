@@ -356,6 +356,7 @@ export class KmsService {
     const pkcs11  = this.hsmSession.getPkcs11();
     const keyId   = uuidv4();
 
+    // Verify master wrap key exists (proves ceremony is complete)
     const wrapKeyHandle = this.findKeyByLabel(WRAP_KEY_LABEL);
     if (!wrapKeyHandle) {
       throw new Error('Master wrap key (blue:wrap:v1) not found. Complete the key ceremony first.');
@@ -366,16 +367,24 @@ export class KmsService {
     if (!curveOid) throw new Error(`Unsupported curve: ${curveName}`);
 
     /*
-     * Generate EC keypair as SESSION objects — NOT persisted to HSM token storage.
-     * Public key:  CKA_EXTRACTABLE=true  (public keys are not secret)
-     * Private key: CKA_SENSITIVE=true    (cannot be read in plaintext)
-     *              CKA_EXTRACTABLE=true  (can exit HSM as AES-256 ciphertext via C_WrapKey)
-     *              CKA_TOKEN=false       (session only — destroyed after wrapping)
+     * Generate EC keypair as PERSISTENT TOKEN objects on the HSM.
+     *
+     * Luna DPoD partitions enforce strict key policies that prevent wrapping
+     * EC private keys (CKR_KEY_NOT_WRAPPABLE). Instead, we store keys as
+     * permanent HSM token objects with unique labels. The DB stores the
+     * HSM label as a reference — private key material NEVER leaves the HSM.
+     *
+     * This is actually stronger security than wrapping: the private key
+     * cannot be extracted in any form, even as ciphertext.
      */
+    const keyLabel = `blue:wallet:${keyId}`;
+
     const publicKeyTemplate: pkcs11js.Template = [
       { type: pkcs11js.CKA_CLASS,     value: pkcs11js.CKO_PUBLIC_KEY },
       { type: pkcs11js.CKA_KEY_TYPE,  value: pkcs11js.CKK_EC },
-      { type: pkcs11js.CKA_TOKEN,     value: false },
+      { type: pkcs11js.CKA_TOKEN,     value: true },
+      { type: pkcs11js.CKA_LABEL,     value: `${keyLabel}:pub` },
+      { type: pkcs11js.CKA_ID,        value: Buffer.from(keyId) },
       { type: pkcs11js.CKA_VERIFY,    value: true },
       { type: pkcs11js.CKA_EC_PARAMS, value: curveOid },
     ];
@@ -383,12 +392,13 @@ export class KmsService {
     const privateKeyTemplate: pkcs11js.Template = [
       { type: pkcs11js.CKA_CLASS,       value: pkcs11js.CKO_PRIVATE_KEY },
       { type: pkcs11js.CKA_KEY_TYPE,    value: pkcs11js.CKK_EC },
-      { type: pkcs11js.CKA_TOKEN,       value: false },
+      { type: pkcs11js.CKA_TOKEN,       value: true },
+      { type: pkcs11js.CKA_LABEL,       value: keyLabel },
+      { type: pkcs11js.CKA_ID,          value: Buffer.from(keyId) },
       { type: pkcs11js.CKA_PRIVATE,     value: true },
       { type: pkcs11js.CKA_SENSITIVE,   value: true },
-      { type: pkcs11js.CKA_EXTRACTABLE, value: true },   // allows C_WrapKey
+      { type: pkcs11js.CKA_EXTRACTABLE, value: false },
       { type: pkcs11js.CKA_SIGN,        value: true },
-      { type: pkcs11js.CKA_EC_PARAMS,   value: curveOid },
     ];
 
     const keys = pkcs11.C_GenerateKeyPair(
@@ -402,24 +412,10 @@ export class KmsService {
     const publicKeyBuffer = this.extractPublicKey(keys.publicKey, algorithm);
     const publicKeyHex    = publicKeyBuffer.toString('hex');
 
-    // Wrap private key with AES-256-CBC-PAD — exits HSM as ciphertext only
-    // Pre-allocate a generous output buffer (EC private key + padding overhead)
-    const iv             = crypto.randomBytes(16);
-    const wrappedBuffer  = pkcs11.C_WrapKey(
-      session,
-      { mechanism: pkcs11js.CKM_AES_CBC_PAD, parameter: iv },
-      wrapKeyHandle,
-      keys.privateKey,
-      Buffer.alloc(256),
-    );
+    // Store HSM label as the key reference (private key stays permanently on HSM)
+    const wrappedPrivateKey = `hsm:${keyLabel}`;
 
-    // Destroy session objects — private key no longer accessible anywhere
-    try { pkcs11.C_DestroyObject(session, keys.publicKey);  } catch { /* ignore */ }
-    try { pkcs11.C_DestroyObject(session, keys.privateKey); } catch { /* ignore */ }
-
-    const wrappedPrivateKey = `${iv.toString('hex')}:${Buffer.from(wrappedBuffer).toString('hex')}`;
-
-    logger.info('Wallet key generated and wrapped', { keyId, algorithm });
+    logger.info('Wallet key generated on HSM', { keyId, keyLabel, algorithm });
     return { wrappedPrivateKey, publicKeyHex, keyId };
   }
 
@@ -438,44 +434,24 @@ export class KmsService {
     const session = this.hsmSession.getSession();
     const pkcs11  = this.hsmSession.getPkcs11();
 
-    const wrapKeyHandle = this.findKeyByLabel(WRAP_KEY_LABEL);
-    if (!wrapKeyHandle) throw new Error('Master wrap key not found. HSM may need reconnecting.');
+    let privateKeyHandle: Buffer;
 
-    const parts = wrappedPrivateKeyHex.split(':');
-    if (parts.length !== 2) throw new Error('Invalid wrapped key format in database.');
-    const iv         = Buffer.from(parts[0], 'hex');
-    const ciphertext = Buffer.from(parts[1], 'hex');
-
-    const curveName = ALGORITHM_CONFIG[algorithm].params?.namedCurve as string;
-    const curveOid  = EC_CURVE_OIDS[curveName];
-
-    // Unwrap into HSM session — session-only key, auto-destroyed on session close
-    const unwrappedKeyTemplate: pkcs11js.Template = [
-      { type: pkcs11js.CKA_CLASS,       value: pkcs11js.CKO_PRIVATE_KEY },
-      { type: pkcs11js.CKA_KEY_TYPE,    value: pkcs11js.CKK_EC },
-      { type: pkcs11js.CKA_TOKEN,       value: false },
-      { type: pkcs11js.CKA_SENSITIVE,   value: true },
-      { type: pkcs11js.CKA_EXTRACTABLE, value: false },
-      { type: pkcs11js.CKA_SIGN,        value: true },
-      { type: pkcs11js.CKA_EC_PARAMS,   value: curveOid },
-    ];
-
-    const tempHandle = pkcs11.C_UnwrapKey(
-      session,
-      { mechanism: pkcs11js.CKM_AES_CBC_PAD, parameter: iv },
-      wrapKeyHandle,
-      ciphertext,
-      unwrappedKeyTemplate,
-    );
+    if (wrappedPrivateKeyHex.startsWith('hsm:')) {
+      // Key is stored permanently on the HSM — find by label
+      const label = wrappedPrivateKeyHex.slice(4);
+      const handle = this.findKeyByLabel(label);
+      if (!handle) throw new Error(`HSM key not found: ${label}. HSM may need reconnecting.`);
+      privateKeyHandle = handle;
+    } else {
+      throw new Error('Unsupported key format. Expected hsm: prefix.');
+    }
 
     // Sign — private key never leaves HSM
-    pkcs11.C_SignInit(session, { mechanism: pkcs11js.CKM_ECDSA }, tempHandle);
+    pkcs11.C_SignInit(session, { mechanism: pkcs11js.CKM_ECDSA }, privateKeyHandle);
     const signature = Buffer.from(pkcs11.C_Sign(session, hash, Buffer.alloc(512)));
 
-    // Explicitly destroy the temp session key
-    try { pkcs11.C_DestroyObject(session, tempHandle); } catch { /* auto-destroyed on session close */ }
-
-    logger.debug('Signed with wrapped key', { algorithm });
+    // Token keys are persistent — do NOT destroy them
+    logger.debug('Signed with HSM key', { algorithm });
     return signature;
   }
 

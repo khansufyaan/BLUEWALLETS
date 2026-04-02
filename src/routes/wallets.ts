@@ -44,7 +44,7 @@ export function createWalletRoutes(walletService: WalletService): Router {
       logger.error('Wallet creation failed', { error });
       let msg = error instanceof Error ? error.message : 'Wallet creation failed';
       if (msg.includes('CKR_GENERAL_ERROR') || msg.includes('CKR_MECHANISM_INVALID')) {
-        msg += ' (This HSM may not support the required curve. Ed25519/Solana requires Luna HSM — SoftHSM does not support it.)';
+        msg += ' (The HSM may not support the required curve or wrapping mechanism for this key type.)';
       }
       res.status(500).json({ error: msg });
     }

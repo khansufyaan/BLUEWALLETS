@@ -10,21 +10,19 @@
  *     NEVER exists in application memory — it exists inside the HSM only
  *     for the brief duration of C_Sign, then is destroyed.
  *
+ * Dual control:
+ *   Handled at the HSM level via Luna PED (M-of-N physical keys).
+ *   This application does not implement software-level dual officer
+ *   approval — that was removed as it provided no cryptographic
+ *   guarantee and was bypassed by any admin with API access.
+ *
  * Disaster recovery:
  *   Handled entirely by the bank's Luna HA cluster and Backup HSM.
  *   Blue Wallets does not implement a software recovery path.
- *
- * What was removed vs the old design:
- *   - BIP-39 mnemonic generation (unnecessary — no human writes down words)
- *   - BIP-32 HMAC-SHA512 derivation (happened in Node.js memory — Level 3 violation)
- *   - Shamir's Secret Sharing on entropy (happened in Node.js memory — Level 3 violation)
- *   - C_GenerateRandom entropy pulled out of HSM (Level 3 violation)
- *   - C_CreateObject key import (key touched memory — Level 3 violation)
  */
 
 import pkcs11js from 'pkcs11js';
 import { HsmSession } from './hsm-session';
-import { CeremonyApprovalService } from './ceremony-approval-service';
 import { logger } from '../utils/logger';
 
 export const WRAP_KEY_LABEL = 'blue:wrap:v1';
@@ -33,7 +31,6 @@ export interface CeremonyState {
   completed:      boolean;
   completedAt:    Date | null;
   wrapKeyLabel:   string | null;   // label of the wrap key on HSM
-  coinTypes:      string[];
   keysGenerated:  boolean;         // true if blue:wrap:v1 exists on HSM
 }
 
@@ -42,13 +39,11 @@ export class CeremonyService {
     completed:    false,
     completedAt:  null as Date | null,
     wrapKeyLabel: null as string | null,
-    coinTypes:    [] as string[],
     keysGenerated: false,
   };
 
   constructor(
     private hsmSession: HsmSession,
-    private approvalService: CeremonyApprovalService,
   ) {}
 
   /**
@@ -62,6 +57,7 @@ export class CeremonyService {
       if (this.hsmSession.isConnected() && this.wrapKeyExistsOnHsm()) {
         this.state.keysGenerated = true;
         this.state.wrapKeyLabel  = WRAP_KEY_LABEL;
+        this.state.completed     = true;
         logger.info('Key ceremony: master wrap key found on HSM — ceremony previously completed');
       }
     } catch {
@@ -72,7 +68,9 @@ export class CeremonyService {
   /**
    * Generate the master wrap key inside the HSM.
    *
-   * Requires an approved ceremony request.
+   * Any authenticated admin can trigger this — real dual control is
+   * enforced at the HSM level via Luna PED (M-of-N physical keys).
+   *
    * The key is generated entirely inside the HSM boundary via C_GenerateKey.
    * CKA_SENSITIVE=true  — cannot be read in plaintext
    * CKA_EXTRACTABLE=false — cannot leave the HSM under any circumstance
@@ -80,11 +78,6 @@ export class CeremonyService {
    * Idempotent: if blue:wrap:v1 already exists, marks it as active and returns.
    */
   async generateMasterKeys(): Promise<{ wrapKeyLabel: string }> {
-    const approval = this.approvalService.getActive();
-    if (!approval || approval.status !== 'approved') {
-      throw new Error('Ceremony not approved. Officers must approve before generating keys.');
-    }
-
     const session = this.hsmSession.getSession();
     const pkcs11  = this.hsmSession.getPkcs11();
 
@@ -93,7 +86,8 @@ export class CeremonyService {
       logger.info('Master wrap key already exists on HSM, reusing', { label: WRAP_KEY_LABEL });
       this.state.wrapKeyLabel  = WRAP_KEY_LABEL;
       this.state.keysGenerated = true;
-      this.approvalService.markUsed(approval.id);
+      this.state.completed     = true;
+      this.state.completedAt   = new Date();
       return { wrapKeyLabel: WRAP_KEY_LABEL };
     }
 
@@ -133,7 +127,8 @@ export class CeremonyService {
 
     this.state.wrapKeyLabel  = WRAP_KEY_LABEL;
     this.state.keysGenerated = true;
-    this.approvalService.markUsed(approval.id);
+    this.state.completed     = true;
+    this.state.completedAt   = new Date();
 
     logger.info('Master wrap key generated and sealed into HSM', {
       label: WRAP_KEY_LABEL,
@@ -144,31 +139,18 @@ export class CeremonyService {
     return { wrapKeyLabel: WRAP_KEY_LABEL };
   }
 
-  /** Finalise ceremony with the coin types the bank wants to support. */
-  completeCeremony(coinTypes: string[]): CeremonyState {
-    const keysReady = this.state.keysGenerated || this.wrapKeyExistsOnHsm();
-    if (!keysReady) {
-      throw new Error('Master keys not yet generated. Run key generation step first.');
-    }
-    this.state.completed   = true;
-    this.state.completedAt = new Date();
-    this.state.coinTypes   = coinTypes;
-    logger.info('Key ceremony completed', { coinTypes });
-    return this.getStatus();
-  }
-
   getStatus(): CeremonyState {
     // Always do a live HSM check so status survives server restarts
     const keyOnHsm = this.hsmSession.isConnected() ? this.wrapKeyExistsOnHsm() : false;
     if (keyOnHsm && !this.state.keysGenerated) {
       this.state.keysGenerated = true;
       this.state.wrapKeyLabel  = WRAP_KEY_LABEL;
+      this.state.completed     = true;
     }
     return {
-      completed:     this.state.completed,
+      completed:     this.state.completed || keyOnHsm,
       completedAt:   this.state.completedAt,
       wrapKeyLabel:  keyOnHsm ? WRAP_KEY_LABEL : null,
-      coinTypes:     this.state.coinTypes,
       keysGenerated: keyOnHsm || this.state.keysGenerated,
     };
   }

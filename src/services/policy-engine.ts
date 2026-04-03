@@ -111,7 +111,7 @@ export class PolicyEngine {
       case 'blacklist':
         return this.evalBlacklist(rule.params, transfer);
       case 'velocity':
-        return this.evalVelocity(rule.params, history);
+        return this.evalVelocity(rule.params, transfer, history);
       case 'approval_threshold':
         return this.evalApprovalThreshold(rule.params, transfer);
       case 'time_window':
@@ -174,16 +174,25 @@ export class PolicyEngine {
 
   private evalVelocity(
     params: Record<string, unknown>,
+    transfer: TransferRequest,
     history: Transaction[]
   ): { passed: boolean; reason?: string } {
-    const maxTx = params.maxTransactions as number;
+    const maxAmount = BigInt(params.maxAmount as string || '0');
     const windowMs = (params.windowMinutes as number) * 60 * 1000;
     const windowStart = new Date(Date.now() - windowMs);
-    const count = history.filter(
-      (tx) => tx.status === 'completed' && tx.createdAt >= windowStart
-    ).length;
-    if (count >= maxTx) {
-      return { passed: false, reason: `${count} transactions in window (max ${maxTx})` };
+
+    // Sum completed transfer amounts in the time window
+    const spent = history
+      .filter((tx) => tx.status === 'completed' && tx.createdAt >= windowStart)
+      .reduce((sum, tx) => sum + tx.amount, BigInt(0));
+
+    const newTotal = spent + BigInt(transfer.amount);
+
+    if (newTotal > maxAmount) {
+      return {
+        passed: false,
+        reason: `Window spend ${newTotal.toString()} + this transfer would exceed velocity limit ${maxAmount.toString()} in ${params.windowMinutes}min`,
+      };
     }
     return { passed: true };
   }

@@ -14,7 +14,17 @@ async function req(path) {
 }
 
 export async function renderConnectivity() {
-  const health = await req('/ops/health/full');
+  let health;
+  try {
+    health = await req('/ops/health/full');
+  } catch (e) {
+    return `
+      <div style="text-align:center;padding:var(--sp-8);color:var(--text-tertiary)">
+        <div style="font-size:32px;margin-bottom:var(--sp-4)">&#9888;</div>
+        <h3 style="color:var(--text-primary);margin-bottom:var(--sp-2)">Health check failed</h3>
+        <p style="font-size:13px">${e.message || 'Could not reach health endpoint. The backend may be restarting.'}</p>
+      </div>`;
+  }
 
   return `
     ${renderOverallBanner(health)}
@@ -47,6 +57,14 @@ function renderOverallBanner(h) {
 
 function renderSignerCard(signer) {
   const ok = signer?.status === 'connected';
+  const isMtls = signer?.mtls === true;
+  const transportColor = isMtls ? 'var(--emerald)' : 'var(--amber)';
+  const transportBg = isMtls ? 'rgba(16,185,129,0.08)' : 'rgba(245,158,11,0.08)';
+  const transportBorder = isMtls ? 'rgba(16,185,129,0.2)' : 'rgba(245,158,11,0.2)';
+  const lockIcon = isMtls
+    ? `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="2" y="6" width="10" height="7" rx="2" stroke="${transportColor}" stroke-width="1.2"/><path d="M4 6V4a3 3 0 016 0v2" stroke="${transportColor}" stroke-width="1.2" stroke-linecap="round"/><circle cx="7" cy="9.5" r="1" fill="${transportColor}"/></svg>`
+    : `<svg width="14" height="14" viewBox="0 0 14 14" fill="none"><rect x="2" y="6" width="10" height="7" rx="2" stroke="${transportColor}" stroke-width="1.2"/><path d="M10 6V4a3 3 0 00-6 0" stroke="${transportColor}" stroke-width="1.2" stroke-linecap="round"/></svg>`;
+
   return `
     <div class="card" style="margin-bottom:var(--sp-6)">
       <div class="card-header">
@@ -56,6 +74,25 @@ function renderSignerCard(signer) {
         </div>
         <span class="badge ${ok ? 'badge-confirmed' : 'badge-error'}">${ok ? 'Connected' : 'Error'}</span>
       </div>
+
+      <!-- Transport Security Banner -->
+      <div style="margin-bottom:var(--sp-4);padding:var(--sp-3) var(--sp-4);background:${transportBg};border:1px solid ${transportBorder};border-radius:var(--r-md);display:flex;align-items:center;gap:var(--sp-3)">
+        ${lockIcon}
+        <div style="flex:1">
+          <div style="font-size:13px;font-weight:600;color:${transportColor}">
+            Transport: ${signer?.transport || 'HTTP'}
+          </div>
+          <div style="font-size:11px;color:var(--text-tertiary);margin-top:2px">
+            ${isMtls
+              ? `Mutual TLS active — client cert: <code style="color:var(--text-secondary)">${signer?.certFile || 'console-cert.pem'}</code> · CA: <code style="color:var(--text-secondary)">${signer?.caFile || 'ca.pem'}</code>`
+              : `Plaintext HTTP over internal network. Mount certificates and set <code style="color:var(--text-secondary)">MTLS_ENABLED=true</code> to enable mutual TLS.`}
+          </div>
+        </div>
+        <span class="badge" style="background:${transportBg};color:${transportColor};border:1px solid ${transportBorder};font-size:11px">
+          ${isMtls ? 'Encrypted' : 'Unencrypted'}
+        </span>
+      </div>
+
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:var(--sp-4)">
         <div>
           <div class="field-label">Endpoint</div>
@@ -76,9 +113,7 @@ function renderSignerCard(signer) {
       </div>
       ${!ok && signer?.error ? `<div style="margin-top:var(--sp-3);padding:var(--sp-3);background:var(--red-bg);border-radius:var(--r-md);font-size:12px;color:var(--red)">${signer.error}</div>` : ''}
       <div style="margin-top:var(--sp-3);font-size:11px;color:var(--text-tertiary)">
-        <strong>How it works:</strong> Gateway connects to signer via internal Docker network (or bank's internal LAN).
-        The signer has NO internet access. Connection is authenticated via shared key (upgrade to mTLS for production).
-        The gateway sends transaction hashes to the signer, which returns HSM signatures.
+        ${signer?.note || 'Console connects to Driver via internal Docker network (or bank LAN). The Driver has NO internet access.'}
       </div>
     </div>`;
 }

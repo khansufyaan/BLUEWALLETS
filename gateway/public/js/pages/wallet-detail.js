@@ -78,6 +78,17 @@ export async function renderWalletDetail(walletId) {
             <span class="stat-value mono">${wallet.algorithm}</span>
           </div>
           <div class="stat-row">
+            <span class="stat-label">Key Mode</span>
+            <span class="stat-value">${wallet.hdVersion
+              ? `<span style="color:var(--blue-400);font-weight:600">HD (BIP-44 v${wallet.hdVersion})</span>`
+              : '<span style="color:var(--text-tertiary)">Legacy (HSM Token)</span>'}</span>
+          </div>
+          ${wallet.derivationPath ? `
+          <div class="stat-row">
+            <span class="stat-label">Derivation Path</span>
+            <span class="stat-value mono" style="color:var(--blue-400)">${wallet.derivationPath}</span>
+          </div>` : ''}
+          <div class="stat-row">
             <span class="stat-label">Created</span>
             <span class="stat-value">${new Date(wallet.createdAt).toLocaleDateString()}</span>
           </div>

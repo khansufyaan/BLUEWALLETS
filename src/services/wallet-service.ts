@@ -3,11 +3,13 @@ import { v4 as uuidv4 } from 'uuid';
 import { KmsService } from './kms-service';
 import { PolicyEngine } from './policy-engine';
 import { AddressService } from './address-service';
+import { deriveChild, buildBip44Path, zeroBuffer } from './hd-derivation';
 import {
   Wallet, Transaction, CreateWalletRequest, TransferRequest,
 } from '../types/wallet';
 import { CHAIN_CONFIGS } from '../types/chain';
 import { IWalletStore, ITransactionStore } from '../types/store';
+import { walletConfig } from '../config';
 import { logger } from '../utils/logger';
 
 export class WalletService {
@@ -26,13 +28,51 @@ export class WalletService {
 
     const algorithm = chainConfig.algorithm;
     const currency  = req.currency || chainConfig.ticker;
+    const useHd     = this.isHdMode();
 
-    // Generate EC keypair on HSM as session objects, wrap private key with blue:wrap:v1.
-    // The private key NEVER exists in application memory — FIPS 140-3 Level 3 compliant.
-    const { wrappedPrivateKey, publicKeyHex, keyId } =
-      await this.kms.generateAndWrapWalletKey(algorithm);
+    let wrappedPrivateKey: string;
+    let publicKeyHex: string;
+    let keyId: string;
+    let derivationPath: string | undefined;
+    let hdVersion: string | undefined;
 
-    // Derive blockchain address from public key (public keys are not sensitive)
+    if (useHd) {
+      // ── HD Mode: BIP-32 derive → HSM import → wrap ──────────────────
+      const index = await this.getNextDerivationIndex(req.chain);
+      derivationPath = buildBip44Path(req.chain, index);
+      hdVersion = 'v1';
+
+      // Read master seed from HSM (zeroed immediately after derivation)
+      const masterSeed = await this.kms.readMasterSeed();
+
+      try {
+        // Derive child key (BIP-32 HMAC-SHA512 chain in app memory)
+        const derived = deriveChild(masterSeed, derivationPath);
+
+        try {
+          // Import child key to HSM session → wrap with blue:wrap:v1
+          const wrapped = await this.kms.importAndWrapEcKey(derived.privateKey, algorithm);
+          wrappedPrivateKey = wrapped.wrappedPrivateKey;
+          keyId = wrapped.keyId;
+          publicKeyHex = derived.publicKeyHex;
+        } finally {
+          zeroBuffer(derived.privateKey);
+          zeroBuffer(derived.publicKeyCompressed);
+        }
+      } finally {
+        zeroBuffer(masterSeed);
+      }
+
+      logger.info('HD wallet key derived and wrapped', { derivationPath, keyId: keyId! });
+    } else {
+      // ── Legacy Mode: generate permanent HSM token key ─────────────────
+      const result = await this.kms.generateAndWrapWalletKey(algorithm);
+      wrappedPrivateKey = result.wrappedPrivateKey;
+      publicKeyHex = result.publicKeyHex;
+      keyId = result.keyId;
+    }
+
+    // Derive blockchain address from public key
     const address = this.addressService.deriveAddress(publicKeyHex, req.chain);
 
     const wallet: Wallet = {
@@ -44,7 +84,9 @@ export class WalletService {
       algorithm,
       address,
       publicKey: publicKeyHex,
-      wrappedPrivateKey,             // AES-256-CBC-PAD ciphertext — safe to store in DB
+      wrappedPrivateKey,
+      derivationPath,
+      hdVersion,
       balance: BigInt(req.initialBalance || '0'),
       currency,
       status: 'active',
@@ -55,8 +97,38 @@ export class WalletService {
     };
 
     await this.walletStore.create(wallet);
-    logger.info('Wallet created', { walletId: wallet.id, chain: req.chain, address, algorithm });
+    logger.info('Wallet created', {
+      walletId: wallet.id, chain: req.chain, address, algorithm,
+      mode: useHd ? 'hd-derived' : 'hsm-token',
+      derivationPath: derivationPath || 'n/a',
+    });
     return wallet;
+  }
+
+  /** Determine if HD mode should be used for new wallets. */
+  private isHdMode(): boolean {
+    // Explicit config takes precedence
+    if (walletConfig.keyMode === 'hd-derived') return true;
+    if (walletConfig.keyMode === 'hsm-token') {
+      // Even in hsm-token mode, auto-upgrade if HD master exists
+      return this.kms.hdMasterExists();
+    }
+    return false;
+  }
+
+  /** Get the next available derivation index for a chain. */
+  private async getNextDerivationIndex(chain: string): Promise<number> {
+    const wallets = await this.walletStore.findAll();
+    const hdWallets = wallets.filter(w => w.chain === chain && w.derivationPath);
+    if (hdWallets.length === 0) return 0;
+
+    // Parse the last component of each path and find the max
+    const indices = hdWallets.map(w => {
+      const parts = w.derivationPath!.split('/');
+      return parseInt(parts[parts.length - 1].replace("'", ''), 10);
+    }).filter(n => !isNaN(n));
+
+    return indices.length > 0 ? Math.max(...indices) + 1 : 0;
   }
 
   async getWallet(id: string): Promise<Wallet> {

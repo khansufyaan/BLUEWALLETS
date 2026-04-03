@@ -104,6 +104,9 @@ export async function renderWallets() {
             <button class="copy-btn" onclick="navigator.clipboard.writeText('${w.address}').then(()=>{this.textContent='Copied';setTimeout(()=>{this.textContent='Copy'},1000)})">Copy</button>
           </td>
           <td class="mono">${formatAmount(w.balance, w.currency)}</td>
+          <td>${w.hdVersion
+            ? `<span style="color:var(--blue-400);font-size:11px;font-weight:600" title="${w.derivationPath || ''}">HD v${w.hdVersion}</span>`
+            : '<span style="color:var(--text-tertiary);font-size:11px">Legacy</span>'}</td>
           <td><span class="badge badge-${w.status}">${w.status}</span></td>
           <td>
             <div style="display:flex;gap:6px">
@@ -129,6 +132,7 @@ export async function renderWallets() {
               <th class="sortable" data-sort="chain">Chain</th>
               <th>Address</th>
               <th class="sortable" data-sort="balance">Balance</th>
+              <th>Mode</th>
               <th class="sortable" data-sort="status">Status</th>
               <th>Actions</th>
             </tr>

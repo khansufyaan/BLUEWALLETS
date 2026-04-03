@@ -73,6 +73,7 @@ export function createInternalRoutes(svc: InternalServices): Router {
         address: w.address, publicKey: w.publicKey, currency: w.currency,
         balance: w.balance.toString(), status: w.status, vaultId: w.vaultId,
         policyIds: w.policyIds, metadata: w.metadata, createdAt: w.createdAt,
+        derivationPath: w.derivationPath || null, hdVersion: w.hdVersion || null,
       }));
       res.json({ wallets: safe });
     } catch (error) {
@@ -89,6 +90,7 @@ export function createInternalRoutes(svc: InternalServices): Router {
         address: w.address, publicKey: w.publicKey, currency: w.currency,
         balance: w.balance.toString(), status: w.status, vaultId: w.vaultId,
         policyIds: w.policyIds, metadata: w.metadata, createdAt: w.createdAt,
+        derivationPath: w.derivationPath || null, hdVersion: w.hdVersion || null,
       });
     } catch (error) {
       res.status(500).json({ error: 'Failed to get wallet' });
@@ -98,7 +100,7 @@ export function createInternalRoutes(svc: InternalServices): Router {
   router.post('/wallets', async (req: Request, res: Response) => {
     try {
       const wallet = await svc.walletService.createWallet(req.body);
-      res.status(201).json(wallet);
+      res.status(201).json({ ...wallet, balance: wallet.balance.toString() });
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Failed to create wallet';
       res.status(400).json({ error: msg });
@@ -108,7 +110,7 @@ export function createInternalRoutes(svc: InternalServices): Router {
   router.post('/wallets/:id/transfer', async (req: Request, res: Response) => {
     try {
       const tx = await svc.walletService.transfer(req.params.id, req.body);
-      res.json(tx);
+      res.json({ ...tx, amount: tx.amount.toString() });
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Transfer failed';
       res.status(400).json({ error: msg });
@@ -118,7 +120,7 @@ export function createInternalRoutes(svc: InternalServices): Router {
   router.get('/wallets/:id/transactions', async (req: Request, res: Response) => {
     try {
       const txs = await svc.walletService.getTransactions(req.params.id);
-      res.json({ transactions: txs });
+      res.json({ transactions: txs.map(t => ({ ...t, amount: t.amount.toString() })) });
     } catch (error) {
       res.status(500).json({ error: 'Failed to get transactions' });
     }
@@ -149,7 +151,7 @@ export function createInternalRoutes(svc: InternalServices): Router {
   router.post('/wallets/:id/policies', async (req: Request, res: Response) => {
     try {
       const result = await svc.walletService.attachPolicy(req.params.id, req.body.policyId);
-      res.json(result);
+      res.json({ ...result, balance: result.balance.toString() });
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Failed to attach policy';
       res.status(400).json({ error: msg });
@@ -159,7 +161,7 @@ export function createInternalRoutes(svc: InternalServices): Router {
   router.delete('/wallets/:id/policies/:policyId', async (req: Request, res: Response) => {
     try {
       const result = await svc.walletService.detachPolicy(req.params.id, req.params.policyId);
-      res.json(result);
+      res.json({ ...result, balance: result.balance.toString() });
     } catch (error) {
       res.status(400).json({ error: 'Failed to detach policy' });
     }
@@ -200,7 +202,7 @@ export function createInternalRoutes(svc: InternalServices): Router {
   router.post('/vaults/:id/wallets', async (req: Request, res: Response) => {
     try {
       const wallet = await svc.walletService.createWallet({ ...req.body, vaultId: req.params.id });
-      res.status(201).json(wallet);
+      res.status(201).json({ ...wallet, balance: wallet.balance.toString() });
     } catch (error) {
       const msg = error instanceof Error ? error.message : 'Failed to create wallet in vault';
       res.status(400).json({ error: msg });
@@ -211,7 +213,7 @@ export function createInternalRoutes(svc: InternalServices): Router {
     try {
       const wallets = await svc.walletStore.findAll();
       const filtered = wallets.filter(w => w.vaultId === req.params.id);
-      res.json({ wallets: filtered });
+      res.json({ wallets: filtered.map(w => ({ ...w, balance: w.balance.toString() })) });
     } catch (error) {
       res.status(500).json({ error: 'Failed to list vault wallets' });
     }

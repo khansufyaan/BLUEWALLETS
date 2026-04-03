@@ -5,6 +5,7 @@ import { api } from '../api.js';
 const STEPS = [
   { id: 'connect',  title: 'Connect HSM',         subtitle: 'Configure your PKCS#11 provider' },
   { id: 'generate', title: 'Generate Master Key',  subtitle: 'AES-256 wrap key generated inside the HSM' },
+  { id: 'hd-seed',  title: 'HD Master Seed',       subtitle: 'BIP-39 mnemonic for hierarchical key derivation (optional)' },
   { id: 'complete', title: 'HSM Ready',            subtitle: 'Your hardware module is initialized' },
 ];
 
@@ -68,6 +69,14 @@ let state = {
   keygenDone:     false,
   keygenError:    null,
   wrapKeyLabel:   null,
+
+  // HD seed (Step 3)
+  hdLoading:   false,
+  hdDone:      false,
+  hdSkipped:   false,
+  hdError:     null,
+  hdMnemonic:  null,
+  hdHash:      null,
 
   // Completion
   completedAt: null,
@@ -175,10 +184,14 @@ function renderConnect() {
           `).join('')}
         </div>
 
-        <div class="cer-connect-action" style="margin-top:8px">
+        <div class="cer-connect-action" style="margin-top:8px;display:flex;gap:var(--sp-3);align-items:center">
           <button class="btn btn-ghost" id="hsm-connect-btn" style="font-size:12px">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M6 1v10M1 6h10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
             Re-test Connection
+          </button>
+          <button class="btn btn-ghost" id="hsm-disconnect-btn" style="font-size:12px;color:var(--red)">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            Disconnect HSM
           </button>
         </div>
       </div>`;
@@ -560,15 +573,141 @@ function renderStep() {
   switch (STEPS[state.step].id) {
     case 'connect':  return renderConnect();
     case 'generate': return renderGenerate();
+    case 'hd-seed':  return renderHdSeed();
     case 'complete': return renderComplete();
     default: return '';
   }
+}
+
+function renderHdSeed() {
+  // Already done or skipped
+  if (state.hdDone) {
+    return `
+      <div class="cer-keygen">
+        <div class="cer-keygen-success">
+          <div class="cer-keygen-success-icon">
+            <svg width="40" height="40" viewBox="0 0 40 40" fill="none">
+              <circle cx="20" cy="20" r="17" stroke="#22C55E" stroke-width="1.5"/>
+              <path d="M13 20l5 5 10-10" stroke="#22C55E" stroke-width="2" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <div class="cer-keygen-success-title">HD Master Seed Generated</div>
+          <div class="cer-keygen-success-sub">BIP-39 mnemonic displayed once. Master seed imported to HSM.</div>
+          <div class="cer-keygen-key-info">
+            <div class="cer-keygen-key-row">
+              <span class="cer-keygen-key-dot" style="background:#22C55E"></span>
+              <code class="cer-keygen-key-label-val">blue:hd:master:v1</code>
+              <span class="cer-keygen-key-algo">Generic Secret (64 bytes) · Wrapped backup stored</span>
+            </div>
+            <div class="cer-keygen-key-row">
+              <span class="cer-keygen-key-dot" style="background:#22C55E"></span>
+              <code class="cer-keygen-key-label-val">blue:encrypt:v1</code>
+              <span class="cer-keygen-key-algo">AES-256 (encrypt/decrypt) · Child key protection</span>
+            </div>
+          </div>
+        </div>
+        <div style="margin-top:var(--sp-4);padding:var(--sp-3) var(--sp-4);background:rgba(37,99,235,0.08);border:1px solid rgba(37,99,235,0.2);border-radius:var(--r-md)">
+          <div style="font-size:13px;font-weight:600;color:var(--blue-400);margin-bottom:4px">Wallet Mode: HD (BIP-32/44)</div>
+          <div style="font-size:11px;color:var(--text-tertiary);line-height:1.6">
+            All new wallets will use hierarchical deterministic derivation from the master seed.
+            Child keys are BIP-44 derived, AES-256 encrypted by the HSM, and stored in the database.
+            <strong style="color:var(--text-secondary)">Zero HSM slots consumed per wallet</strong> — scales to millions.
+          </div>
+        </div>
+      </div>`;
+  }
+
+  if (state.hdSkipped) {
+    return `
+      <div class="cer-keygen">
+        <div style="text-align:center;padding:var(--sp-4);color:var(--text-tertiary)">
+          <p>HD seed generation skipped.</p>
+          <p style="font-size:11px;margin-top:8px">You can generate the HD seed later from this page.</p>
+        </div>
+        <div style="margin-top:var(--sp-3);padding:var(--sp-3) var(--sp-4);background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:var(--r-md)">
+          <div style="font-size:13px;font-weight:600;color:var(--amber);margin-bottom:4px">Wallet Mode: Legacy (HSM Token Keys)</div>
+          <div style="font-size:11px;color:var(--text-tertiary);line-height:1.6">
+            Wallets will use independent EC keypairs stored permanently on the HSM.
+            Each wallet consumes one HSM object slot. No hierarchical derivation.
+          </div>
+        </div>
+      </div>`;
+  }
+
+  // Mnemonic display (after generation)
+  if (state.hdMnemonic) {
+    const words = state.hdMnemonic.split(' ');
+    return `
+      <div class="cer-keygen">
+        <div style="margin-bottom:var(--sp-4);padding:var(--sp-3) var(--sp-4);background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.2);border-radius:var(--r-md)">
+          <strong style="color:var(--amber)">Write down these 24 words now. They will NEVER be shown again.</strong>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:var(--sp-4)">
+          ${words.map((w, i) => `
+            <div style="padding:8px 12px;background:var(--bg-elevated);border-radius:var(--r-sm);font-size:13px">
+              <span style="color:var(--text-tertiary);font-size:10px;margin-right:6px">${i+1}.</span>
+              <strong style="color:var(--text-primary);font-family:'JetBrains Mono',monospace">${w}</strong>
+            </div>
+          `).join('')}
+        </div>
+        <div style="font-size:11px;color:var(--text-tertiary);margin-bottom:var(--sp-3)">
+          Mnemonic hash: <code style="color:var(--text-secondary)">${state.hdHash || ''}</code>
+        </div>
+        <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-secondary);cursor:pointer">
+          <input type="checkbox" id="hd-confirm-backup">
+          I have written down these 24 words and stored them securely.
+        </label>
+        <button class="btn btn-primary" id="hd-confirm-btn" disabled style="margin-top:var(--sp-3)">
+          Confirm & Continue
+        </button>
+      </div>`;
+  }
+
+  // Pre-generation state
+  return `
+    <div class="cer-keygen">
+      <div class="cer-keygen-callout">
+        <div class="cer-keygen-callout-icon">
+          <svg width="18" height="18" viewBox="0 0 18 18" fill="none">
+            <path d="M9 2a4 4 0 0 1 4 4v2H5V6a4 4 0 0 1 4-4z" stroke="#3B82F6" stroke-width="1.4"/>
+            <rect x="3" y="8" width="12" height="8" rx="2" stroke="#3B82F6" stroke-width="1.4"/>
+            <circle cx="9" cy="12" r="1.2" fill="#3B82F6"/>
+          </svg>
+        </div>
+        <div>
+          <div class="cer-keygen-callout-title">BIP-32 Hierarchical Deterministic Wallets</div>
+          <div class="cer-keygen-callout-sub">
+            Generate a 24-word BIP-39 mnemonic. The master seed is imported to the HSM
+            and used to derive child wallet keys deterministically. Each child key is
+            wrapped with <code>blue:wrap:v1</code> and stored in the database.
+          </div>
+        </div>
+      </div>
+
+      ${state.hdError ? `
+        <div class="cer-connect-error">
+          <svg width="14" height="14" viewBox="0 0 14 14" fill="none"><circle cx="7" cy="7" r="5" stroke="var(--red)" stroke-width="1.5"/><path d="M5 5l4 4M9 5l-4 4" stroke="var(--red)" stroke-width="1.2" stroke-linecap="round"/></svg>
+          <span>${state.hdError}</span>
+        </div>` : ''}
+
+      <div style="display:flex;gap:var(--sp-3)">
+        <button class="btn btn-primary" id="hd-generate-btn" ${state.hdLoading ? 'disabled' : ''}>
+          ${state.hdLoading
+            ? '<span>Generating HD seed...</span>'
+            : '<span>Generate HD Master Seed</span>'}
+        </button>
+        <button class="btn btn-ghost" id="hd-skip-btn">
+          Skip (use legacy HSM token keys)
+        </button>
+      </div>
+    </div>`;
 }
 
 function nextDisabled() {
   const id = STEPS[state.step].id;
   if (id === 'connect')  return !state.hsmConnected;
   if (id === 'generate') return !state.keygenDone;
+  if (id === 'hd-seed')  return !(state.hdDone || state.hdSkipped);
   return false;
 }
 
@@ -622,6 +761,7 @@ function initCeremonyHandlers(root) {
   // Step-specific setup
   if (stepId === 'connect')  attachConnectHandlers(root);
   if (stepId === 'generate') attachKeygenHandlers(root);
+  if (stepId === 'hd-seed')  attachHdSeedHandlers(root);
   if (stepId === 'complete') setTimeout(runVerification, 300);
 }
 
@@ -687,6 +827,41 @@ async function handleHsmConnect() {
   }
 }
 
+async function handleHsmDisconnect() {
+  if (!confirm('Disconnect from the current HSM?\n\nThis will invalidate the current session. You can then connect to a different HSM and re-run the ceremony.')) return;
+
+  try {
+    await api.disconnectHsm();
+  } catch (err) {
+    // If disconnect fails, warn but still reset UI — HSM may be in bad state
+    console.warn('HSM disconnect error (proceeding with UI reset):', err);
+  }
+
+  // Reset all ceremony state
+  state.step            = 0;
+  state.hsmConnected    = false;
+  state.hsmProvider     = null;
+  state.hsmLibrary      = '';
+  state.hsmSlot         = 0;
+  state.hsmConnecting   = false;
+  state.hsmConnectError = null;
+  state.hsmTokenLabel   = null;
+  state.hsmConnectStage = 0;
+  state.keygenLoading   = false;
+  state.keygenDone      = false;
+  state.keygenError     = null;
+  state.wrapKeyLabel    = null;
+  state.completedAt     = null;
+  state.verifyStage     = -1;
+  state.verifyError     = null;
+  state.verifyDbType    = null;
+  state.testWallet      = null;
+  state.verifyDone      = false;
+
+  rebuildCeremony();
+  window.dispatchEvent(new CustomEvent('hsm-disconnected'));
+}
+
 function attachConnectHandlers(root) {
   root.querySelectorAll('.cer-vendor-btn').forEach(btn => {
     btn.addEventListener('click', () => {
@@ -710,6 +885,11 @@ function attachConnectHandlers(root) {
   const connectBtn = root.querySelector('#hsm-connect-btn');
   if (connectBtn) {
     connectBtn.addEventListener('click', handleHsmConnect);
+  }
+
+  const disconnectBtn = root.querySelector('#hsm-disconnect-btn');
+  if (disconnectBtn) {
+    disconnectBtn.addEventListener('click', handleHsmDisconnect);
   }
 
   root.querySelectorAll('#hsm-lib, #hsm-pin, #hsm-slot').forEach(input => {
@@ -751,36 +931,107 @@ function attachKeygenHandlers(root) {
   });
 }
 
+// ─── HD Seed handlers ────────────────────────────────────────────────────────
+
+function attachHdSeedHandlers(root) {
+  // Generate button
+  const genBtn = root.querySelector('#hd-generate-btn');
+  if (genBtn) {
+    genBtn.addEventListener('click', async () => {
+      state.hdLoading = true;
+      state.hdError = null;
+      rebuildCeremony();
+
+      try {
+        const result = await api.generateHdSeed();
+        state.hdMnemonic = result.mnemonic;
+        state.hdHash     = result.mnemonicHash;
+        state.hdLoading  = false;
+        rebuildCeremony();
+      } catch (err) {
+        state.hdError   = err.message || 'HD seed generation failed';
+        state.hdLoading = false;
+        rebuildCeremony();
+      }
+    });
+  }
+
+  // Skip button
+  const skipBtn = root.querySelector('#hd-skip-btn');
+  if (skipBtn) {
+    skipBtn.addEventListener('click', () => {
+      state.hdSkipped = true;
+      rebuildCeremony();
+    });
+  }
+
+  // Confirm backup checkbox + button
+  const checkbox = root.querySelector('#hd-confirm-backup');
+  const confirmBtn = root.querySelector('#hd-confirm-btn');
+  if (checkbox && confirmBtn) {
+    checkbox.addEventListener('change', () => {
+      confirmBtn.disabled = !checkbox.checked;
+    });
+    confirmBtn.addEventListener('click', () => {
+      state.hdDone     = true;
+      state.hdMnemonic = null; // Clear from memory
+      rebuildCeremony();
+      setTimeout(() => transition('next'), 800);
+    });
+  }
+}
+
 // ─── Bootstrap ───────────────────────────────────────────────────────────────
 
 export async function initCeremony() {
-  // Check if ceremony was already completed
+  // Step 1: Check if HSM is connected — this gates everything else
+  let hsmConnected = false;
   try {
-    const status = await api.getCeremonyStatus();
-    if (status.keysGenerated) {
-      state.keygenDone   = true;
-      state.wrapKeyLabel = status.wrapKeyLabel || 'blue:wrap:v1';
-      state.completedAt  = status.completedAt || new Date().toISOString();
-      state.step         = STEPS.length - 1; // Jump to complete
+    const hsmStatus = await api.getHsmStatus();
+    if (hsmStatus.connected) {
+      hsmConnected = true;
+      state.hsmConnected  = true;
+      state.hsmProvider   = hsmStatus.provider || null;
+      state.hsmTokenLabel = hsmStatus.tokenLabel || null;
     }
   } catch {
-    // Ignore — ceremony not yet started
+    // HSM not configured — stay on step 0
   }
 
-  // Check if HSM is already connected (persists across user sessions)
-  if (!state.keygenDone) {
+  // Step 2: Only check ceremony status if HSM is actually connected
+  if (hsmConnected) {
     try {
-      const hsmStatus = await api.getHsmStatus();
-      if (hsmStatus.connected) {
-        state.hsmConnected = true;
-        state.hsmProvider  = hsmStatus.provider || null;
-        state.hsmTokenLabel = hsmStatus.tokenLabel || null;
-        // Advance to generate step if still on connect
-        if (state.step === 0) state.step = 1;
+      const status = await api.getCeremonyStatus();
+      if (status.keysGenerated) {
+        state.keygenDone   = true;
+        state.wrapKeyLabel = status.wrapKeyLabel || 'blue:wrap:v1';
+        state.completedAt  = status.completedAt || new Date().toISOString();
+
+        // Check HD state
+        if (status.hdEnabled) {
+          state.hdDone = true;
+          state.hdHash = null; // not stored
+        }
+
+        state.step         = STEPS.length - 1; // Jump to verification
+      } else {
+        // HSM connected but no keys yet — go to generate step
+        state.step = 1;
       }
     } catch {
-      // Ignore — HSM not configured
+      // Ceremony check failed — go to generate step (HSM is connected)
+      state.step = 1;
     }
+  } else {
+    // HSM not connected — start from step 0 (connect)
+    state.step          = 0;
+    state.hsmConnected  = false;
+    state.keygenDone    = false;
+    state.wrapKeyLabel  = null;
+    state.completedAt   = null;
+    state.verifyStage   = -1;
+    state.verifyDone    = false;
+    state.testWallet    = null;
   }
 
   const root = document.querySelector('.cer-root');

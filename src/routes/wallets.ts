@@ -26,7 +26,12 @@ const attachPolicySchema = z.object({
 });
 
 function serializeWallet(w: Wallet) {
-  return { ...w, balance: w.balance.toString() };
+  return {
+    ...w,
+    balance: w.balance.toString(),
+    derivationPath: w.derivationPath || null,
+    hdVersion: w.hdVersion || null,
+  };
 }
 
 function serializeTransaction(tx: Transaction) {

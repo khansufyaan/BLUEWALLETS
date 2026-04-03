@@ -10,7 +10,19 @@ const serviceLastRestart: Record<string, Date> = {};
 let lastConsoleHeartbeat: { lastPingAt: Date; consoleId?: string } | null = null;
 const CONSOLE_TIMEOUT_S = 60;
 
-export function createHealthRoutes(hsmSession: HsmSession, dbType?: 'postgresql' | 'in-memory'): Router {
+export interface InternalApiTlsInfo {
+  mtls: boolean;
+  transport: 'mTLS' | 'HTTP';
+  port: number;
+  certFile?: string;
+  caFile?: string;
+}
+
+export function createHealthRoutes(
+  hsmSession: HsmSession,
+  dbType?: 'postgresql' | 'in-memory',
+  tlsInfo?: InternalApiTlsInfo,
+): Router {
   const router = Router();
 
   // ── Public health check (no auth) ─────────────────────────────────────────
@@ -24,11 +36,34 @@ export function createHealthRoutes(hsmSession: HsmSession, dbType?: 'postgresql'
     }
 
     const status = hsmSession.getStatus();
+
+    // Extract client cert info from mTLS connection (if available)
+    let clientCert: any = undefined;
+    if (tlsInfo?.mtls && (req.socket as any).getPeerCertificate) {
+      try {
+        const peer = (req.socket as any).getPeerCertificate(false);
+        if (peer && peer.subject) {
+          clientCert = {
+            subject:  peer.subject.CN || peer.subject.O || 'Unknown',
+            issuer:   peer.issuer?.CN || peer.issuer?.O || 'Unknown',
+            validTo:  peer.valid_to,
+            serial:   peer.serialNumber,
+          };
+        }
+      } catch { /* no peer cert */ }
+    }
+
     res.status(status.connected ? 200 : 503).json({
       service:   'blue-driver',
       status:    status.connected ? 'healthy' : 'degraded',
       hsm:       status,
       database:  { type: dbType || 'in-memory', connected: true },
+      internalApi: tlsInfo ? {
+        transport: tlsInfo.transport,
+        mtls:      tlsInfo.mtls,
+        port:      tlsInfo.port,
+        ...(clientCert ? { clientCert } : {}),
+      } : { transport: 'HTTP', mtls: false, port: 3200 },
       timestamp: new Date().toISOString(),
     });
   });

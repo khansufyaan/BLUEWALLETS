@@ -21,24 +21,45 @@ export function getSessionToken() { return _sessionToken; }
 async function request(path, options = {}) {
   const headers = { 'Content-Type': 'application/json', ...options.headers };
   if (_sessionToken) headers['Authorization'] = `Bearer ${_sessionToken}`;
-  const res = await fetch(`${BASE}${path}`, { ...options, headers });
-  if (res.status === 401) {
-    setSessionToken(null);
-    window.dispatchEvent(new CustomEvent('session-expired'));
-    throw new Error('Session expired. Please log in again.');
+
+  // Add timeout to prevent hanging on slow/dead backends
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+
+  try {
+    const res = await fetch(`${BASE}${path}`, { ...options, headers, signal: controller.signal });
+    clearTimeout(timeout);
+    if (res.status === 401) {
+      setSessionToken(null);
+      window.dispatchEvent(new CustomEvent('session-expired'));
+      throw new Error('Session expired. Please log in again.');
+    }
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+    return data;
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === 'AbortError') throw new Error('Request timed out — backend may be unreachable');
+    throw err;
   }
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
-  return data;
 }
 
 async function opsRequest(path) {
-  const res = await fetch(path);
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || `HTTP ${res.status}`);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 10000);
+  try {
+    const res = await fetch(path, { signal: controller.signal });
+    clearTimeout(timeout);
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+    return res.json();
+  } catch (err) {
+    clearTimeout(timeout);
+    if (err.name === 'AbortError') throw new Error('Request timed out — backend may be unreachable');
+    throw err;
   }
-  return res.json();
 }
 
 export const auth = {
@@ -64,11 +85,20 @@ export const auth = {
   },
   me: async () => {
     if (!_sessionToken) return null;
-    const res = await fetch('/auth/me', {
-      headers: { Authorization: `Bearer ${_sessionToken}` },
-    });
-    if (!res.ok) { setSessionToken(null); return null; }
-    return res.json();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    try {
+      const res = await fetch('/auth/me', {
+        headers: { Authorization: `Bearer ${_sessionToken}` },
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+      if (!res.ok) return null; // Don't clear token here — let the router decide
+      return res.json();
+    } catch {
+      clearTimeout(timeout);
+      return null; // Network error — don't clear token, might be transient
+    }
   },
 };
 
@@ -88,6 +118,7 @@ export const api = {
   getWallet: (id) => request(`/wallets/${id}`),
   createWallet: (body) => request('/wallets', { method: 'POST', body: JSON.stringify(body) }),
   transfer: (walletId, body) => request(`/wallets/${walletId}/transfer`, { method: 'POST', body: JSON.stringify(body) }),
+  executeWithdrawal: (body) => request('/transfers', { method: 'POST', body: JSON.stringify(body) }),
   getTransactions: (walletId) => request(`/wallets/${walletId}/transactions`).then(d => d.transactions),
   attachPolicy: (walletId, policyId) => request(`/wallets/${walletId}/policies`, { method: 'POST', body: JSON.stringify({ policyId }) }),
   detachPolicy: (walletId, policyId) => request(`/wallets/${walletId}/policies/${policyId}`, { method: 'DELETE' }),

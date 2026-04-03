@@ -37,6 +37,13 @@ services:
       - INTERNAL_AUTH_KEY=${INTERNAL_AUTH_KEY:-blue-internal-dev-key}
       - MTLS_ENABLED=true
       - DATABASE_URL=postgresql://blue:${POSTGRES_PASSWORD:-blue-dev-password}@postgres:5432/bluewallets
+      # Luna DPoD HSM — set in .env or override here
+      - HSM_PKCS11_LIB=/opt/lunaclient/libs/64/libCryptoki2.so
+      - HSM_SLOT_INDEX=0
+      - HSM_PIN=${HSM_PIN:-}
+      - HSM_LABEL=waas-dpod
+      - HSM_USE_SOFTHSM=false
+      - ChrystokiConfigurationPath=/opt/lunaclient
     volumes:
       - ./certs:/app/certs:ro
     networks:
@@ -81,7 +88,7 @@ services:
       - internet
     depends_on:
       blue-driver:
-        condition: service_started
+        condition: service_healthy
 
 networks:
   internal:

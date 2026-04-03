@@ -101,7 +101,7 @@ async function main() {
   const walletService = new WalletService(kms, policyEngine, walletStore, transactionStore);
   const vaultService = new VaultService(vaultStore);
   const rbacService = new RbacService(roleStore);
-  const ceremonyService = new CeremonyService(hsmSession);
+  const ceremonyService = new CeremonyService(hsmSession, kms);
   const hsmConfigService = new HsmConfigService(hsmSession);
 
   // Seed default roles
@@ -177,6 +177,22 @@ async function main() {
 
   // ── Internal API (gateway-facing, port 3200) ──────────────────────────────
   const INTERNAL_PORT = parseInt(process.env.INTERNAL_PORT || '3200', 10);
+
+  // Detect mTLS configuration before mounting routes (so health can report it)
+  const certsDir = path.join(__dirname, '../certs');
+  const mtlsEnabled = process.env.MTLS_ENABLED === 'true';
+  const hasCerts = mtlsEnabled &&
+                   fs.existsSync(path.join(certsDir, 'driver-cert.pem')) &&
+                   fs.existsSync(path.join(certsDir, 'driver-key.pem')) &&
+                   fs.existsSync(path.join(certsDir, 'ca.pem'));
+
+  const tlsInfo = {
+    mtls:      hasCerts,
+    transport: (hasCerts ? 'mTLS' : 'HTTP') as 'mTLS' | 'HTTP',
+    port:      INTERNAL_PORT,
+    ...(hasCerts ? { certFile: 'driver-cert.pem', caFile: 'ca.pem' } : {}),
+  };
+
   const internalApp = express();
   internalApp.use(helmet({ contentSecurityPolicy: false }));
   internalApp.use(express.json());
@@ -186,7 +202,7 @@ async function main() {
   }));
 
   // Health check for internal API (also tracks Console heartbeat via shared handler)
-  internalApp.use('/health', createHealthRoutes(hsmSession, pgPool ? 'postgresql' : 'in-memory'));
+  internalApp.use('/health', createHealthRoutes(hsmSession, pgPool ? 'postgresql' : 'in-memory', tlsInfo));
 
   // Start servers
   const server = app.listen(serverConfig.port, () => {
@@ -196,13 +212,6 @@ async function main() {
   });
 
   // ── mTLS for internal API (if certs are present) ─────────────────────────
-  const certsDir = path.join(__dirname, '../certs');
-  const mtlsEnabled = process.env.MTLS_ENABLED === 'true';
-  const hasCerts = mtlsEnabled &&
-                   fs.existsSync(path.join(certsDir, 'driver-cert.pem')) &&
-                   fs.existsSync(path.join(certsDir, 'driver-key.pem')) &&
-                   fs.existsSync(path.join(certsDir, 'ca.pem'));
-
   let internalServer: any;
 
   if (hasCerts) {

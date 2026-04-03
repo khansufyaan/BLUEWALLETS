@@ -13,6 +13,7 @@ import { SignerClient } from '../services/signer-client';
 import { getProvider, getChainConfig } from '../services/evm/evm-provider';
 import { getEnabledChains, config } from '../config';
 import { complianceStore } from '../stores/compliance-store';
+import { getTransportInfo } from '../services/driver-proxy';
 import { logger } from '../utils/logger';
 
 export function createOpsHealthRoutes(signerClient: SignerClient): Router {
@@ -68,13 +69,20 @@ async function checkSigner(signerClient: SignerClient) {
         walletCount = wallets.length;
       } catch {}
 
+      const transport = getTransportInfo();
       return {
         status:     'connected' as const,
         url:        config.signerUrl,
         latencyMs:  latency,
         walletCount,
         authMethod: config.internalKey ? 'shared-key' : 'none',
-        note:       'Internal network connection to secure zone (no internet)',
+        transport:  transport.transport,
+        mtls:       transport.mtls,
+        certFile:   transport.certFile,
+        caFile:     transport.caFile,
+        note:       transport.mtls
+          ? 'mTLS — mutual TLS with client certificates (production)'
+          : 'HTTP — plaintext internal network (upgrade to mTLS for production)',
       };
     }
     return { status: 'error' as const, url: config.signerUrl, latencyMs: latency, error: 'Health check failed' };

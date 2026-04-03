@@ -101,6 +101,20 @@ function driverRequest(method: string, driverPath: string, body?: string, extraH
   })();
 }
 
+/** Transport status — used by health checks to report mTLS state. */
+export function getTransportInfo() {
+  const certsDir = process.env.CERTS_DIR || '/app/certs';
+  return {
+    transport: (isHttps && tlsAgent) ? 'mTLS' as const : 'HTTP' as const,
+    mtls:      !!(isHttps && tlsAgent),
+    signerUrl: config.signerUrl,
+    authMethod: config.internalKey ? 'shared-key' : 'none',
+    certFile:  (isHttps && tlsAgent) ? 'console-cert.pem' : null,
+    caFile:    (isHttps && tlsAgent) ? 'ca.pem' : null,
+    certsDir,
+  };
+}
+
 export async function proxyGet(driverPath: string, extraHeaders?: Record<string, string>): Promise<any> {
   return driverRequest('GET', driverPath, undefined, extraHeaders);
 }

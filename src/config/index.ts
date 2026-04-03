@@ -29,3 +29,8 @@ export const serverConfig = {
   nodeEnv: process.env.NODE_ENV || 'development',
   logLevel: process.env.LOG_LEVEL || 'info',
 };
+
+export const walletConfig = {
+  /** 'hsm-token' = legacy permanent keys, 'hd-derived' = BIP-32 wrapped child keys */
+  keyMode: (process.env.WALLET_KEY_MODE || 'hsm-token') as 'hsm-token' | 'hd-derived',
+};

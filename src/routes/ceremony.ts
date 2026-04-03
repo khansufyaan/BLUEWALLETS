@@ -33,5 +33,23 @@ export function createCeremonyRoutes(
     }
   });
 
+  /** POST /api/v1/ceremony/generate-hd-seed — generate BIP-39 mnemonic + master seed */
+  router.post('/generate-hd-seed', requireAuth(authService), async (req: Request, res: Response) => {
+    try {
+      logger.info('HD ceremony started', { user: req.session?.displayName });
+      const result = await ceremonyService.generateHdMasterSeed();
+      res.json({
+        mnemonic: result.mnemonic,
+        mnemonicHash: result.mnemonicHash,
+        masterSeedLabel: result.masterSeedLabel,
+        warning: 'Save these 24 words now. They will NEVER be shown again.',
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'HD seed generation failed';
+      logger.error('HD ceremony failed', { error: msg });
+      res.status(500).json({ error: msg });
+    }
+  });
+
   return router;
 }

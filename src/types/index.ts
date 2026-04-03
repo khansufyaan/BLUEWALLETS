@@ -104,6 +104,14 @@ export const EC_CURVE_OIDS: Record<string, Buffer> = {
   'Ed25519': Buffer.from('06032b6570', 'hex'),                // 1.3.101.112
 };
 
+export interface HdMaster {
+  id: string;
+  label: string;
+  wrappedBackup: string;
+  mnemonicHash: string;
+  createdAt: Date;
+}
+
 export * from './policy';
 export * from './wallet';
 export * from './store';

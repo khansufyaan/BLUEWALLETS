@@ -16,10 +16,16 @@ async function req(path, opts = {}) {
 }
 
 export async function renderSettings() {
-  const [settings, health] = await Promise.all([
-    req(OPS),
-    req(HEALTH).catch(() => ({})),
-  ]);
+  let settings = {}, health = {};
+  try {
+    settings = await req(OPS);
+  } catch { settings = { signer: {}, rpc: [], compliance: {} }; }
+  try {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 6000);
+    const r = await fetch(HEALTH, { signal: controller.signal });
+    health = await r.json();
+  } catch { health = {}; }
 
   const compliance = settings.compliance || {};
   const rpc = settings.rpc || [];

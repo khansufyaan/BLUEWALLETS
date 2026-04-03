@@ -30,6 +30,8 @@ import { createOpsGasRoutes } from './routes/ops-gas';
 import { createOpsSettingsRoutes } from './routes/ops-settings';
 import { createOpsHealthRoutes } from './routes/ops-health';
 import { complianceScreen } from './middleware/compliance-screen';
+import { apiKeyAuth } from './middleware/api-key-auth';
+import { createOpsApiKeyRoutes } from './routes/ops-api-keys';
 import { GasStation } from './services/gas-station';
 import { logger } from './utils/logger';
 
@@ -67,8 +69,9 @@ async function main() {
   // Auth routes (proxied to Driver — no auth middleware here)
   app.use('/auth', createProxyAuthRoutes());
 
-  // API routes (bank-facing)
+  // API routes (bank-facing) — API key auth sits before all routes
   const apiRouter = express.Router();
+  apiRouter.use(apiKeyAuth);
   // Blockchain operations
   apiRouter.use('/transfers', complianceScreen, createTransferRoutes(signerClient, balanceSync));
   // Proxy to Driver for wallet/vault/policy/rbac/dashboard
@@ -96,10 +99,12 @@ async function main() {
   // Data proxies (wallets, vaults, policies, dashboard — all via Driver)
   const opsApiRouter = express.Router();
   opsApiRouter.use('/wallets', createProxyWalletRoutes());
+  opsApiRouter.use('/wallets', createBalanceRoutes(signerClient, balanceSync));
   opsApiRouter.use('/vaults', createProxyVaultRoutes());
   opsApiRouter.use('/policies', createProxyPolicyRoutes());
   opsApiRouter.use('/', createProxyRbacRoutes());
   opsApiRouter.use('/dashboard', createProxyDashboardRoutes());
+  opsApiRouter.use('/transfers', complianceScreen, createTransferRoutes(signerClient, balanceSync));
   opsApp.use('/api/v1', opsApiRouter);
 
   // Ops API routes
@@ -107,6 +112,7 @@ async function main() {
   opsApp.use('/ops/compliance', createOpsComplianceRoutes(signerClient));
   opsApp.use('/ops/gas-station', createOpsGasRoutes(signerClient, gasStation));
   opsApp.use('/ops/settings', createOpsSettingsRoutes());
+  opsApp.use('/ops/api-keys', createOpsApiKeyRoutes());
   opsApp.use('/ops/health', createOpsHealthRoutes(signerClient));
 
   // Health

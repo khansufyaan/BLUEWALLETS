@@ -13,13 +13,15 @@ export class PgWalletStore implements IWalletStore {
   async create(wallet: Wallet): Promise<Wallet> {
     await this.pool.query(
       `INSERT INTO wallets (id, vault_id, name, key_id, chain, algorithm, address, public_key,
-        wrapped_private_key, balance, currency, status, metadata, policy_ids, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+        wrapped_private_key, balance, currency, status, metadata, policy_ids, created_at, updated_at,
+        derivation_path, hd_version)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
       [wallet.id, wallet.vaultId, wallet.name, wallet.keyId, wallet.chain, wallet.algorithm,
        wallet.address, wallet.publicKey, wallet.wrappedPrivateKey || null,
        wallet.balance.toString(), wallet.currency, wallet.status,
        JSON.stringify(wallet.metadata), JSON.stringify(wallet.policyIds),
-       wallet.createdAt, wallet.updatedAt]
+       wallet.createdAt, wallet.updatedAt,
+       wallet.derivationPath || null, wallet.hdVersion || null]
     );
     return wallet;
   }
@@ -72,6 +74,8 @@ export class PgWalletStore implements IWalletStore {
       address:          row.address,
       publicKey:        row.public_key,
       wrappedPrivateKey: row.wrapped_private_key || undefined,
+      derivationPath:   row.derivation_path || undefined,
+      hdVersion:        row.hd_version || undefined,
       balance:          BigInt(row.balance || '0'),
       currency:         row.currency,
       status:           row.status,

@@ -14,8 +14,10 @@ export interface Wallet {
   algorithm: KeyAlgorithm;
   address: string;            // blockchain address (derived from public key)
   publicKey: string;          // hex — not sensitive, safe to store plaintext
-  wrappedPrivateKey?: string; // "ivHex:ciphertextHex" — AES-256-CBC-PAD wrapped by blue:wrap:v1
-                              // Only unwrapped inside HSM session during C_Sign, never in app memory
+  wrappedPrivateKey?: string; // Legacy: "hsm:<label>" — persistent token key on HSM
+                              // HD:     "ivHex:ciphertextHex" — AES-256-CBC-PAD wrapped by blue:wrap:v1
+  derivationPath?: string;    // BIP-44 path e.g. "m/44'/60'/0'/0/0" — null for legacy wallets
+  hdVersion?: string;         // "v1" — null for legacy wallets
   balance: bigint;
   currency: string;
   status: WalletStatus;

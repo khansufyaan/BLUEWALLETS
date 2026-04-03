@@ -99,6 +99,7 @@ export const api = {
   // Key Ceremony
   getCeremonyStatus:  () => request('/ceremony/status'),
   generateMasterKeys: () => request('/ceremony/generate-keys', { method: 'POST' }),
+  generateHdSeed:     () => request('/ceremony/generate-hd-seed', { method: 'POST' }),
 
   // HSM Configuration
   getHsmStatus:     () => request('/hsm/status'),

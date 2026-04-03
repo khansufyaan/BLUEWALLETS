@@ -15,13 +15,17 @@ const SERVICES = [
 // ── Main render ────────────────────────────────────────────────────────────────
 export async function renderHealth() {
   try {
-    const [health, stats] = await Promise.all([api.health(), api.getStats()]);
+    const [health, stats, ceremonyStatus] = await Promise.all([
+      api.health(), api.getStats(),
+      api.getCeremonyStatus().catch(() => ({ hdEnabled: false, keysGenerated: false })),
+    ]);
 
     const hsm   = health.hsm  || {};
     const slot  = hsm.slotInfo  || {};
     const token = hsm.tokenInfo || {};
     const allHealthy = hsm.connected;
     const checkedAt  = new Date(health.timestamp);
+    const hdEnabled  = ceremonyStatus.hdEnabled === true;
 
     // ── Status Banner ──────────────────────────────────────
     const banner = `
@@ -65,6 +69,24 @@ export async function renderHealth() {
           <div class="h-stat"><span class="h-stat-label">Free (priv)</span><span class="h-stat-value mono">${token.freePrivateMemory ? formatBytes(token.freePrivateMemory) : '—'}</span></div>
         </div>
 
+        <!-- Wallet Key Mode Indicator -->
+        <div style="margin-top:12px;padding:10px 14px;background:${hdEnabled ? 'rgba(37,99,235,0.08)' : 'rgba(100,116,139,0.08)'};border:1px solid ${hdEnabled ? 'rgba(37,99,235,0.2)' : 'rgba(100,116,139,0.15)'};border-radius:8px;display:flex;align-items:center;gap:10px">
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none"><path d="M8 2v12M4 6h8M4 10h8" stroke="${hdEnabled ? 'var(--blue-400)' : 'var(--text-tertiary)'}" stroke-width="1.3" stroke-linecap="round"/></svg>
+          <div style="flex:1">
+            <div style="font-size:12px;font-weight:600;color:${hdEnabled ? 'var(--blue-400)' : 'var(--text-secondary)'}">
+              Wallet Mode: ${hdEnabled ? 'HD (BIP-32/44)' : 'Legacy (HSM Token Keys)'}
+            </div>
+            <div style="font-size:10px;color:var(--text-tertiary);margin-top:2px">
+              ${hdEnabled
+                ? 'Child keys derived from master seed, AES-encrypted by HSM, stored in DB. Zero HSM slots per wallet.'
+                : 'Independent EC keypairs stored permanently on HSM. One slot per wallet.'}
+            </div>
+          </div>
+          <span style="font-size:10px;padding:3px 8px;border-radius:4px;background:${hdEnabled ? 'rgba(37,99,235,0.08)' : 'rgba(100,116,139,0.08)'};color:${hdEnabled ? 'var(--blue-400)' : 'var(--text-tertiary)'};border:1px solid ${hdEnabled ? 'rgba(37,99,235,0.2)' : 'rgba(100,116,139,0.15)'};font-weight:500">
+            ${hdEnabled ? 'HD Active' : 'Legacy'}
+          </span>
+        </div>
+
         <div class="h-card-actions">
           <button class="h-btn h-btn-primary" data-action="restart-svc" data-svc="hsm" id="btn-restart-hsm">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M10 6A4 4 0 112 6" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/><path d="M10 3v3h-3" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
@@ -78,6 +100,11 @@ export async function renderHealth() {
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="1" y="2" width="10" height="8" rx="1.5" stroke="currentColor" stroke-width="1.2"/><path d="M3 5h6M3 7h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
             Logs
           </button>
+          ${hsm.connected ? `
+          <button class="h-btn h-btn-ghost" id="btn-disconnect-hsm" style="color:var(--red);border-color:rgba(239,68,68,0.2)">
+            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+            Disconnect
+          </button>` : ''}
         </div>
 
         <!-- PIN Change Panel (hidden by default) -->
@@ -122,6 +149,12 @@ export async function renderHealth() {
       </div>`;
 
     // ── API Server Card ────────────────────────────────────
+    const intApi = health.internalApi || {};
+    const isMtls = intApi.mtls === true;
+    const transportColor = isMtls ? '#22C55E' : '#F59E0B';
+    const transportBg = isMtls ? 'rgba(34,197,94,0.08)' : 'rgba(245,158,11,0.08)';
+    const transportBorder = isMtls ? 'rgba(34,197,94,0.2)' : 'rgba(245,158,11,0.2)';
+
     const apiCard = `
       <div class="card h-card">
         <div class="h-card-header">
@@ -138,11 +171,32 @@ export async function renderHealth() {
           <span class="h-pill h-pill-ok">Healthy</span>
         </div>
         <div class="h-stat-grid">
-          <div class="h-stat"><span class="h-stat-label">Service</span><span class="h-stat-value">${health.service || 'waas-kms'}</span></div>
-          <div class="h-stat"><span class="h-stat-label">Endpoint</span><span class="h-stat-value mono">:3100</span></div>
-          <div class="h-stat"><span class="h-stat-label">Uptime</span><span class="h-stat-value">—</span></div>
+          <div class="h-stat"><span class="h-stat-label">Service</span><span class="h-stat-value">${health.service || 'blue-driver'}</span></div>
+          <div class="h-stat"><span class="h-stat-label">Dashboard</span><span class="h-stat-value mono">:3100</span></div>
+          <div class="h-stat"><span class="h-stat-label">Internal API</span><span class="h-stat-value mono">:${intApi.port || 3200}</span></div>
           <div class="h-stat"><span class="h-stat-label">Requests</span><span class="h-stat-value">—</span></div>
         </div>
+
+        <!-- Transport Security Indicator -->
+        <div style="margin-top:12px;padding:10px 14px;background:${transportBg};border:1px solid ${transportBorder};border-radius:8px;display:flex;align-items:center;gap:10px">
+          ${isMtls
+            ? `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="7" width="12" height="8" rx="2" stroke="${transportColor}" stroke-width="1.3"/><path d="M5 7V5a3 3 0 016 0v2" stroke="${transportColor}" stroke-width="1.3" stroke-linecap="round"/><circle cx="8" cy="11" r="1.2" fill="${transportColor}"/></svg>`
+            : `<svg width="16" height="16" viewBox="0 0 16 16" fill="none"><rect x="2" y="7" width="12" height="8" rx="2" stroke="${transportColor}" stroke-width="1.3"/><path d="M11 7V5a3 3 0 00-6 0" stroke="${transportColor}" stroke-width="1.3" stroke-linecap="round"/></svg>`}
+          <div style="flex:1">
+            <div style="font-size:12px;font-weight:600;color:${transportColor}">
+              Console ↔ Driver: ${intApi.transport || 'HTTP'}
+            </div>
+            <div style="font-size:10px;color:var(--text-tertiary);margin-top:2px">
+              ${isMtls
+                ? `Internal API (:${intApi.port || 3200}) secured with mutual TLS — client certificate required`
+                : `Internal API (:${intApi.port || 3200}) running over plaintext HTTP — set MTLS_ENABLED=true and mount certs for production`}
+            </div>
+          </div>
+          <span style="font-size:10px;padding:3px 8px;border-radius:4px;background:${transportBg};color:${transportColor};border:1px solid ${transportBorder};font-weight:500">
+            ${isMtls ? 'Encrypted' : 'Unencrypted'}
+          </span>
+        </div>
+
         <div class="h-card-actions">
           <button class="h-btn h-btn-ghost" data-action="logs-svc" data-svc="api" id="btn-logs-api">
             <svg width="12" height="12" viewBox="0 0 12 12" fill="none"><rect x="1" y="2" width="10" height="8" rx="1.5" stroke="currentColor" stroke-width="1.2"/><path d="M3 5h6M3 7h4" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/></svg>
@@ -279,6 +333,26 @@ function attachHealthHandlers() {
   document.querySelectorAll('[data-action="logs-svc"]').forEach(btn => {
     btn.addEventListener('click', () => toggleLogs(btn.dataset.svc, btn));
   });
+
+  // Disconnect HSM
+  const disconnectBtn = document.getElementById('btn-disconnect-hsm');
+  if (disconnectBtn) {
+    disconnectBtn.addEventListener('click', async () => {
+      if (!confirm('Disconnect from the HSM?\n\nThis will close the PKCS#11 session. You can reconnect via the Key Ceremony page.')) return;
+      const orig = disconnectBtn.innerHTML;
+      disconnectBtn.disabled = true;
+      disconnectBtn.textContent = 'Disconnecting...';
+      try {
+        await api.disconnectHsm();
+        // Redirect to ceremony page to reconnect
+        window.location.hash = '#/';
+      } catch (err) {
+        alert('Failed to disconnect: ' + (err.message || 'Unknown error'));
+        disconnectBtn.disabled = false;
+        disconnectBtn.innerHTML = orig;
+      }
+    });
+  }
 
   // PIN change panel
   const pinToggle = document.getElementById('btn-change-pin-toggle');

@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import jsSha3 from 'js-sha3';
 import { Chain, CHAIN_CONFIGS, NetworkType } from '../types/chain';
 import { parseEcPoint, compressPublicKey } from '../utils/crypto-helpers';
 
@@ -63,8 +64,18 @@ export class AddressService {
    * Ethereum / EVM: 0x + EIP-55 checksum
    */
   private deriveEvmAddress(publicKeyHex: string): string {
-    const { x, y } = parseEcPoint(publicKeyHex);
-    const rawPoint = Buffer.concat([x, y]); // 64 bytes, no 04 prefix
+    const buf = Buffer.from(publicKeyHex, 'hex');
+    let rawPoint: Buffer;
+
+    // Handle both DER-wrapped HSM keys and raw SEC1 keys (from HD derivation)
+    if (buf.length === 65 && buf[0] === 0x04) {
+      // Raw SEC1 uncompressed: 04 || x(32) || y(32) — strip the 04 prefix
+      rawPoint = buf.subarray(1);
+    } else {
+      // DER-wrapped from HSM — use parseEcPoint
+      const { x, y } = parseEcPoint(publicKeyHex);
+      rawPoint = Buffer.concat([x, y]);
+    }
     const hash = this.keccak256(rawPoint);
     const addressBytes = hash.subarray(12); // last 20 bytes
 
@@ -120,14 +131,9 @@ export class AddressService {
    * We use a pure implementation as fallback.
    */
   private keccak256(data: Buffer): Buffer {
-    // Node.js 22+ and OpenSSL 3.x have keccak256 support
-    try {
-      return crypto.createHash('sha3-256').update(data).digest();
-    } catch {
-      // Fallback: this is technically SHA3-256 not Keccak-256
-      // For production, use a proper keccak library
-      return crypto.createHash('sha3-256').update(data).digest();
-    }
+    // Keccak-256 (NOT SHA3-256 — Ethereum uses original Keccak, not NIST SHA3).
+    // They differ in padding: Keccak uses 0x01, SHA3 uses 0x06.
+    return Buffer.from(jsSha3.keccak256.arrayBuffer(data));
   }
 
   // ─── Base58 / Base58Check ──────────────────────────────────

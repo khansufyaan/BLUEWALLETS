@@ -100,6 +100,19 @@ CREATE TABLE IF NOT EXISTS audit_log (
   prev_hash TEXT
 );
 
+-- HD wallet columns (backward compatible — nullable for legacy wallets)
+ALTER TABLE wallets ADD COLUMN IF NOT EXISTS derivation_path TEXT;
+ALTER TABLE wallets ADD COLUMN IF NOT EXISTS hd_version TEXT;
+
+-- HD master seed metadata
+CREATE TABLE IF NOT EXISTS hd_masters (
+  id TEXT PRIMARY KEY,
+  label TEXT NOT NULL UNIQUE,
+  wrapped_backup TEXT,
+  mnemonic_hash TEXT NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
 -- Indexes
 CREATE INDEX IF NOT EXISTS idx_wallets_vault_id ON wallets(vault_id);
 CREATE INDEX IF NOT EXISTS idx_wallets_address ON wallets(address);

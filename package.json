@@ -13,17 +13,20 @@
     "lint": "eslint src/"
   },
   "dependencies": {
+    "@noble/curves": "^2.0.1",
+    "@noble/hashes": "^2.0.1",
+    "@simplewebauthn/server": "^11.0.0",
     "bcryptjs": "^2.4.3",
     "bip39": "^3.1.0",
     "cors": "^2.8.5",
-    "shamirs-secret-sharing": "^2.0.1",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
     "graphene-pk11": "^2.3.0",
     "helmet": "^7.1.0",
+    "js-sha3": "^0.9.3",
     "pg": "^8.13.0",
-    "@simplewebauthn/server": "^11.0.0",
     "pkcs11js": "^2.1.6",
+    "shamirs-secret-sharing": "^2.0.1",
     "uuid": "^10.0.0",
     "winston": "^3.14.0",
     "zod": "^3.23.0"

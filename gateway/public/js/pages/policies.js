@@ -3,7 +3,7 @@ import { api } from '../api.js';
 const RULE_TYPES = [
   { value: 'spending_limit', label: 'Spending Limit', paramLabel: 'Max Amount', paramKey: 'maxAmount' },
   { value: 'daily_limit', label: 'Daily Limit', paramLabel: 'Max Daily Amount', paramKey: 'maxDailyAmount' },
-  { value: 'velocity', label: 'Velocity', paramLabel: 'Max Transactions', paramKey: 'maxTransactions', extraKey: 'windowMinutes', extraLabel: 'Window (min)' },
+  { value: 'velocity', label: 'Velocity', paramLabel: 'Max Amount (wei)', paramKey: 'maxAmount', extraKey: 'windowMinutes', extraLabel: 'Window (min)' },
   { value: 'approval_threshold', label: 'Approval Threshold', paramLabel: 'Threshold', paramKey: 'threshold' },
   { value: 'whitelist', label: 'Whitelist', paramLabel: 'Wallet IDs (comma-sep)', paramKey: 'walletIds' },
   { value: 'blacklist', label: 'Blacklist', paramLabel: 'Wallet IDs (comma-sep)', paramKey: 'walletIds' },

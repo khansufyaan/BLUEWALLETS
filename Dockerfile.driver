@@ -6,8 +6,6 @@
 # or the Key Ceremony UI at :3100.
 # ============================================================
 
-# Single stage build — pkcs11js needs native build tools at install time
-# and the compiled .node binary needs to match the runtime Node version
 FROM node:22-bookworm
 
 RUN apt-get update && \
@@ -17,14 +15,17 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-# Install dependencies (includes native compilation of pkcs11js)
+# Install ALL dependencies (including devDeps for TypeScript compiler)
 COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev
+RUN npm ci
 
 # Build TypeScript
 COPY tsconfig.json ./
 COPY src/ ./src/
 RUN npx tsc
+
+# Prune dev dependencies (typescript, etc.) — keep only production deps
+RUN npm prune --omit=dev
 
 # Copy runtime assets
 COPY src/db/schema.sql ./dist/db/schema.sql

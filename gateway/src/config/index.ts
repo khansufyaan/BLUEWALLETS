@@ -16,7 +16,7 @@ export interface ChainConfig {
 export const EVM_CHAINS: Record<string, ChainConfig> = {
   ethereum: {
     chainId:       parseInt(process.env.ETH_CHAIN_ID || '11155111'),  // Sepolia by default
-    rpcUrl:        process.env.ETH_RPC_URL || 'https://eth-sepolia.g.alchemy.com/v2/demo',
+    rpcUrl:        process.env.ETH_RPC_URL || '',  // MUST be configured — no default
     ticker:        'ETH',
     name:          'Ethereum',
     eip1559:       true,

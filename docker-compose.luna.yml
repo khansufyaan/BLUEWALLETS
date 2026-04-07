@@ -40,7 +40,7 @@ services:
       - HSM_PKCS11_LIB=/opt/lunaclient/libs/64/libCryptoki2.so
       - HSM_SLOT_INDEX=0
       - HSM_PIN=${HSM_PIN:-}
-      - HSM_LABEL=waas-dpod
+      - HSM_LABEL=${HSM_LABEL:-waas-production}
       - HSM_USE_SOFTHSM=false
       - ChrystokiConfigurationPath=/opt/lunaclient
     volumes:

@@ -1,0 +1,16 @@
+node_modules
+dist
+.git
+.github
+.env
+.env.*
+*.pem
+luna-client
+certs
+gateway
+website
+docs
+*.md
+*.pdf
+*.log
+.DS_Store

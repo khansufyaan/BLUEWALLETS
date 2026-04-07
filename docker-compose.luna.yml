@@ -24,8 +24,7 @@ services:
   blue-driver:
     build:
       context: .
-      dockerfile: Dockerfile.luna
-    platform: linux/amd64
+      dockerfile: Dockerfile.driver
     ports:
       - "3200:3200"          # Internal API (Console-facing, mTLS when certs present)
       - "3100:3100"          # Driver dashboard (HSM setup only)
@@ -46,6 +45,9 @@ services:
       - ChrystokiConfigurationPath=/opt/lunaclient
     volumes:
       - ./certs:/app/certs:ro
+      # Mount Luna client directory (contains PKCS#11 libs + partition certs)
+      # Clients: change this path to where your Luna client is installed
+      - ${LUNA_CLIENT_DIR:-./luna-client}:/opt/lunaclient:ro
     networks:
       - internal
     depends_on:

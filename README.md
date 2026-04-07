@@ -67,42 +67,65 @@ Blue Wallets provides a self-hosted, FIPS-compliant key management and wallet in
 
 ---
 
-## Quick Start (SoftHSM2 — Development)
+## Quick Start — Client Deployment
+
+> **Use `docker-compose.client.yml`** for all deployments. This uses pre-built Docker images from GitHub Container Registry — no build step required.
 
 ```bash
-# Clone the repo
+# 1. Clone the repo
 git clone https://github.com/khansufyaan/BLUEWALLETS.git
 cd BLUEWALLETS
 
-# Start with the default docker-compose (uses SoftHSM2 inside the container)
-docker compose up -d
+# 2. Generate mTLS certificates (Driver <-> Console security)
+chmod +x certs/generate-certs.sh
+./certs/generate-certs.sh
 
-# Open the UI
+# 3. Create environment file
+cat > .env << 'EOF'
+POSTGRES_PASSWORD=change-me-strong-password
+INTERNAL_AUTH_KEY=$(openssl rand -hex 32)
+ETH_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/YOUR_KEY
+EOF
+
+# 4. Start all services
+docker compose -f docker-compose.client.yml up -d
+
+# 5. Open Blue Driver (Key Ceremony)
 open http://localhost:3100
+
+# 6. Open Blue Console (Operations)
+open http://localhost:3400
 ```
 
-Default credentials: `admin` / `Admin1234!`
+Default credentials: `admin` / `Admin1234!` — **change immediately after first login.**
 
----
+### With Luna HSM
 
-## Quick Start (Luna Cloud HSM — Production)
+If using Thales Luna HSM (on-prem or DPoD), mount your Luna client directory:
 
 ```bash
-# Place Luna client files in luna-client/
-cp /path/to/cvclient-min.tar     luna-client/
-cp /path/to/Chrystoki.conf       luna-client/
-cp /path/to/partition-ca-certificate.pem  luna-client/
-cp /path/to/partition-certificate.pem     luna-client/
-cp /path/to/server-certificate.pem        luna-client/
+# Place Luna client files in luna-client/ directory:
+#   luna-client/libs/64/libCryptoki2.so  (PKCS#11 library)
+#   luna-client/Chrystoki.conf           (configuration)
+#   luna-client/partition-*.pem          (DPoD partition certs)
+#   luna-client/server-certificate.pem   (DPoD server cert)
 
-# Build and start
+# Then start with Luna compose (mounts luna-client/ into the container):
 docker compose -f docker-compose.luna.yml up -d
-
-# Monitor logs
-docker compose -f docker-compose.luna.yml logs -f
 ```
 
-The server starts on `http://localhost:3100`. Open the UI and follow the Key Ceremony wizard.
+> **Important:** The `luna-client/` directory contains your HSM credentials and is excluded from git via `.gitignore`. You must provide your own Luna client files.
+
+### With SoftHSM2 (Development Only)
+
+```bash
+# Uses the default docker-compose (SoftHSM2 bundled in container)
+docker compose up -d
+```
+
+> **Warning:** SoftHSM2 is NOT FIPS certified. Use only for development and testing.
+
+For detailed deployment instructions, see [DEPLOYMENT.md](DEPLOYMENT.md) or the [PDF guide](docs/Blue-Wallets-Deployment-Guide.pdf).
 
 ---
 

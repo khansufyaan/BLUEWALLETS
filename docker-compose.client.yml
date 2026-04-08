@@ -37,8 +37,8 @@ services:
   blue-driver:
     image: ghcr.io/khansufyaan/blue-driver:latest
     ports:
-      - "3100:3100"          # Driver dashboard (admin only)
-      - "3200:3200"          # Internal API (mTLS)
+      - "${DRIVER_PORT:-443}:3100"    # Driver dashboard (default 443 for enterprise)
+      - "${INTERNAL_PORT:-3200}:3200" # Internal API (mTLS)
     environment:
       - PORT=3100
       - INTERNAL_PORT=3200

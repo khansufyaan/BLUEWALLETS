@@ -9,6 +9,8 @@
  */
 
 import path from 'path';
+import fs from 'fs';
+import https from 'https';
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
@@ -138,9 +140,24 @@ async function main() {
     logger.info(`Enabled chains: ${enabledChains.join(', ') || 'none'}`);
   });
 
-  const opsServer = opsApp.listen(OPS_PORT, () => {
-    logger.info(`Ops Dashboard running on port ${OPS_PORT}`);
-  });
+  // Start ops dashboard — with optional TLS for enterprise environments
+  const opsTlsCert = process.env.OPS_TLS_CERT || '';
+  const opsTlsKey = process.env.OPS_TLS_KEY || '';
+  let opsServer: any;
+
+  if (opsTlsCert && opsTlsKey && fs.existsSync(opsTlsCert) && fs.existsSync(opsTlsKey)) {
+    const tlsOptions = {
+      cert: fs.readFileSync(opsTlsCert),
+      key: fs.readFileSync(opsTlsKey),
+    };
+    opsServer = https.createServer(tlsOptions, opsApp).listen(OPS_PORT, () => {
+      logger.info(`Ops Dashboard running on port ${OPS_PORT} (HTTPS/TLS)`);
+    });
+  } else {
+    opsServer = opsApp.listen(OPS_PORT, () => {
+      logger.info(`Ops Dashboard running on port ${OPS_PORT} (HTTP)`);
+    });
+  }
 
   // Start gas station (will check if configured)
   gasStation.start();

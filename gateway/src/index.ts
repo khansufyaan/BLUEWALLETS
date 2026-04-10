@@ -88,7 +88,10 @@ async function main() {
   // ── Ops Dashboard (:3400) ─────────────────────────────────────────────────
   const OPS_PORT = parseInt(process.env.OPS_PORT || '3400', 10);
   const opsApp = express();
-  opsApp.use(helmet({ contentSecurityPolicy: false }));
+  opsApp.use(helmet({
+    contentSecurityPolicy: false,
+    strictTransportSecurity: false,  // disable HSTS — app serves HTTP, not HTTPS
+  }));
   opsApp.use(cors());
   opsApp.use(express.json());
 

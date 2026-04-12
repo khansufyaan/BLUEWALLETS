@@ -81,12 +81,70 @@ export class HsmSession {
 
   /**
    * Returns the active PKCS#11 session handle.
+   * If the session has gone stale (HSM dropped it due to idle timeout,
+   * network interruption, etc.), automatically reconnects.
    */
   getSession(): pkcs11js.Handle {
-    if (!this.session) {
+    if (!this.session || !this.config.pin) {
       throw new Error('HSM session not initialized. Call initialize() first.');
     }
-    return this.session;
+
+    // Probe the session — if the HSM dropped it, this will throw
+    try {
+      this.pkcs11.C_GetSessionInfo(this.session);
+    } catch (err) {
+      logger.warn('HSM session stale — auto-reconnecting', {
+        error: err instanceof Error ? err.message : 'unknown',
+      });
+      this.autoReconnect();
+    }
+
+    return this.session!;
+  }
+
+  /**
+   * Attempt to re-establish the PKCS#11 session using stored config.
+   * Called automatically when a stale session is detected.
+   */
+  private autoReconnect(): void {
+    try {
+      // Close old session/finalize gracefully
+      try { if (this.session) this.pkcs11.C_CloseSession(this.session); } catch { /* ignore */ }
+      try { if (this.initialized) this.pkcs11.C_Finalize(); } catch { /* ignore */ }
+
+      // Reset state
+      this.session = null;
+      this.slotId = null;
+      this.initialized = false;
+      this.loggedIn = false;
+      this.pkcs11 = new pkcs11js.PKCS11();
+
+      // Re-initialize
+      this.pkcs11.load(this.config.pkcs11Library);
+      this.pkcs11.C_Initialize();
+      this.initialized = true;
+
+      const slots = this.pkcs11.C_GetSlotList(true);
+      if (slots.length === 0) throw new Error('No HSM slots with tokens found');
+      this.slotId = slots[this.config.slotIndex];
+
+      this.session = this.pkcs11.C_OpenSession(
+        this.slotId,
+        pkcs11js.CKF_SERIAL_SESSION | pkcs11js.CKF_RW_SESSION
+      );
+
+      this.pkcs11.C_Login(this.session, pkcs11js.CKU_USER, this.config.pin);
+      this.loggedIn = true;
+
+      logger.info('HSM session auto-reconnected successfully');
+    } catch (err) {
+      logger.error('HSM auto-reconnect failed', {
+        error: err instanceof Error ? err.message : 'unknown',
+      });
+      this.session = null;
+      this.loggedIn = false;
+      throw new Error('HSM session lost and auto-reconnect failed. Reconnect via the UI.');
+    }
   }
 
   /**
@@ -166,7 +224,14 @@ export class HsmSession {
   }
 
   isConnected(): boolean {
-    return this.loggedIn && this.session !== null;
+    if (!this.loggedIn || !this.session) return false;
+    // Probe the session to check if it's still alive
+    try {
+      this.pkcs11.C_GetSessionInfo(this.session);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**

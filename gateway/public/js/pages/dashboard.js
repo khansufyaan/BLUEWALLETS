@@ -3,10 +3,10 @@ import { api } from '../api.js';
 export async function renderDashboard() {
   try {
     const [stats, wallets, vaults, recentTxs] = await Promise.all([
-      api.getStats(),
-      api.getWallets(),
-      api.getVaults(),
-      api.getAllTransactions(50),
+      api.getStats().catch(() => ({ totalTransactions: 0, transactionsToday: 0, completedToday: 0, rejectedToday: 0, aumByCurrency: {} })),
+      api.getWallets().catch(() => []),
+      api.getVaults().catch(() => []),
+      api.getAllTransactions(50).catch(() => []),
     ]);
 
     // Build wallet lookup for tx feed
@@ -111,10 +111,10 @@ export async function renderDashboard() {
                 <div>
                   <div class="tx-row-title">
                     ${fromW ? `<span class="chain-dot chain-dot-${fromW.chain}"></span>` : ''}
-                    <span style="font-weight:500">${fromW?.name || tx.fromWalletId.substring(0, 8)}</span>
+                    <span style="font-weight:500">${fromW?.name || (tx.fromWalletId ? tx.fromWalletId.substring(0, 8) : '—')}</span>
                     <span class="tx-arrow">&rarr;</span>
                     ${toW ? `<span class="chain-dot chain-dot-${toW.chain}"></span>` : ''}
-                    <span style="font-weight:500">${toW?.name || tx.toWalletId.substring(0, 8)}</span>
+                    <span style="font-weight:500">${toW?.name || (tx.toWalletId ? tx.toWalletId.substring(0, 8) : '—')}</span>
                   </div>
                   <div class="tx-row-detail">
                     ${tx.memo ? `${tx.memo} &middot; ` : ''}

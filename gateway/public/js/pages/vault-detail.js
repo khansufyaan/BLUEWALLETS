@@ -1,5 +1,10 @@
 import { api } from '../api.js';
 
+function safeBigInt(val) {
+  try { return BigInt(val || '0').toLocaleString(); }
+  catch { return String(val || '0'); }
+}
+
 const CHAINS = [
   { value: 'bitcoin', label: 'Bitcoin', ticker: 'BTC', color: '#F7931A' },
   { value: 'ethereum', label: 'Ethereum', ticker: 'ETH', color: '#627EEA' },
@@ -34,8 +39,8 @@ export async function renderVaultDetail(vaultId) {
           </div>
         </td>
         <td style="text-transform:capitalize">${w.chain}</td>
-        <td class="mono text-sm">${w.address.substring(0, 18)}...</td>
-        <td class="mono">${BigInt(w.balance).toLocaleString()} ${w.currency}</td>
+        <td class="mono text-sm">${w.address ? w.address.substring(0, 18) + '...' : '—'}</td>
+        <td class="mono">${safeBigInt(w.balance)} ${w.currency || ''}</td>
         <td><span class="badge badge-${w.status}">${w.status}</span></td>
       </tr>
     `).join('');

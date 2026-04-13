@@ -11,7 +11,7 @@ export async function renderVaults() {
     const [vaults, wallets, recentTxs] = await Promise.all([
       api.getVaults(),
       api.getWallets(),
-      api.getAllTransactions(200),
+      api.getAllTransactions(200).catch(() => []),
     ]);
 
     // Build lookups

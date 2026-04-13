@@ -144,4 +144,26 @@ export const api = {
   getOpsDeposits:     () => opsRequest(`${OPS_BASE}/deposits`),
   getOpsWallets:      () => opsRequest(`${OPS_BASE}/wallets`),
   getOpsChains:       () => opsRequest(`${OPS_BASE}/chains`),
+  getOpsHealth:       () => opsRequest(`${OPS_BASE}/health`),
+
+  // Audit log
+  getAuditLog:        (params) => opsRequest(`${OPS_BASE}/audit-log${params ? '?' + new URLSearchParams(params) : ''}`),
+
+  // Webhooks
+  getWebhooks:        () => opsRequest(`${OPS_BASE}/webhooks`),
+  createWebhook:      (body) => fetch(`${OPS_BASE}/webhooks`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json()),
+  deleteWebhook:      (id) => fetch(`${OPS_BASE}/webhooks/${id}`, { method: 'DELETE' }).then(r => r.json()),
+  testWebhook:        (id) => fetch(`${OPS_BASE}/webhooks/${id}/test`, { method: 'POST' }).then(r => r.json()),
+
+  // Risk
+  getRiskData:        () => opsRequest(`${OPS_BASE}/risk`),
+
+  // Key Ceremonies
+  getKeyCeremonies:   () => opsRequest(`${OPS_BASE}/key-ceremonies`),
+  createKeyCeremony:  (body) => fetch(`${OPS_BASE}/key-ceremonies`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json()),
+
+  // Multi-sig Approvals
+  getApprovals:       () => opsRequest(`${OPS_BASE}/approvals`),
+  approveRequest:     (id) => fetch(`${OPS_BASE}/approvals/${id}/approve`, { method: 'POST' }).then(r => r.json()),
+  rejectRequest:      (id) => fetch(`${OPS_BASE}/approvals/${id}/reject`, { method: 'POST' }).then(r => r.json()),
 };

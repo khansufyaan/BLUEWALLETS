@@ -21,7 +21,7 @@ export async function renderCreateWallet() {
     ${vaults.map(v => `
       <a href="#/vaults/${v.id}" class="card" style="text-decoration:none;flex:1;min-width:200px;cursor:pointer">
         <h3>${v.name}</h3>
-        <p class="text-sm text-muted">${v.walletIds.length} wallets</p>
+        <p class="text-sm text-muted">${(v.walletIds || []).length} wallets</p>
       </a>
     `).join('')}
   </div>`;

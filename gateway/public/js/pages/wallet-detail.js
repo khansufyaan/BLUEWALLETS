@@ -1,15 +1,21 @@
 import { api } from '../api.js';
 
+function safeBigInt(val) {
+  try { return BigInt(val || '0').toLocaleString(); }
+  catch { return String(val || '0'); }
+}
+
 export async function renderWalletDetail(walletId) {
   try {
     const [wallet, txs, policies] = await Promise.all([
       api.getWallet(walletId),
-      api.getTransactions(walletId),
-      api.getPolicies(),
+      api.getTransactions(walletId).catch(() => []),
+      api.getPolicies().catch(() => []),
     ]);
 
-    const attachedPolicies = policies.filter(p => wallet.policyIds.includes(p.id));
-    const availablePolicies = policies.filter(p => !wallet.policyIds.includes(p.id));
+    const policyIds = wallet.policyIds || [];
+    const attachedPolicies = policies.filter(p => policyIds.includes(p.id));
+    const availablePolicies = policies.filter(p => !policyIds.includes(p.id));
 
     const txRows = txs.length === 0
       ? '<tr><td colspan="6" class="text-sm text-muted" style="text-align:center;padding:32px">No transactions yet</td></tr>'
@@ -19,9 +25,9 @@ export async function renderWalletDetail(walletId) {
           return `<tr>
             <td class="mono text-xs">${new Date(tx.createdAt).toLocaleString()}</td>
             <td style="color:${dirColor};font-weight:500">${dir}</td>
-            <td class="mono">${BigInt(tx.amount).toLocaleString()} ${tx.currency}</td>
+            <td class="mono">${safeBigInt(tx.amount)} ${tx.currency || ''}</td>
             <td><span class="badge badge-${tx.status}">${tx.status}</span></td>
-            <td class="mono text-xs">${tx.signature ? tx.signature.substring(0, 20) + '...' : '-'}</td>
+            <td class="mono text-xs">${tx.signature ? String(tx.signature).substring(0, 20) + '...' : '-'}</td>
             <td class="text-xs text-muted">${tx.failureReason || tx.memo || ''}</td>
           </tr>`;
         }).join('');
@@ -53,7 +59,7 @@ export async function renderWalletDetail(walletId) {
 
       <div class="hsm-badge" style="margin-bottom:24px">
         <span class="shield-icon">&#128737;</span>
-        Private key secured in Luna HSM &middot; FIPS 140-3 Level 3 &middot; Key ID: <span class="mono">${wallet.keyId.substring(0, 8)}...</span>
+        Private key secured in Luna HSM &middot; FIPS 140-3 Level 3${wallet.keyId ? ` &middot; Key ID: <span class="mono">${String(wallet.keyId).substring(0, 8)}...</span>` : ''}
       </div>
 
       <div class="grid-2" style="margin-bottom:24px">
@@ -61,13 +67,13 @@ export async function renderWalletDetail(walletId) {
           <div class="stat-row">
             <span class="stat-label">Address</span>
             <div style="display:flex;align-items:center;gap:8px">
-              <span class="mono text-sm">${wallet.address}</span>
-              <button class="copy-btn" onclick="navigator.clipboard.writeText('${wallet.address}').then(()=>{this.textContent='Copied';setTimeout(()=>{this.textContent='Copy'},1000)})">Copy</button>
+              <span class="mono text-sm">${wallet.address || '—'}</span>
+              ${wallet.address ? `<button class="copy-btn" onclick="navigator.clipboard.writeText('${wallet.address}').then(()=>{this.textContent='Copied';setTimeout(()=>{this.textContent='Copy'},1000)})">Copy</button>` : ''}
             </div>
           </div>
           <div class="stat-row">
             <span class="stat-label">Balance</span>
-            <span class="stat-value" style="font-size:18px">${BigInt(wallet.balance).toLocaleString()} ${wallet.currency}</span>
+            <span class="stat-value" style="font-size:18px">${safeBigInt(wallet.balance)} ${wallet.currency || ''}</span>
           </div>
           <div class="stat-row">
             <span class="stat-label">Chain</span>

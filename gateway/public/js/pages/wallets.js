@@ -11,7 +11,7 @@ export async function renderWallets() {
     const [wallets, vaults, stats] = await Promise.all([
       api.getWallets(),
       api.getVaults(),
-      api.getStats(),
+      api.getStats().catch(() => ({ transactionsToday: 0, completedToday: 0, rejectedToday: 0 })),
     ]);
 
     const vaultMap = {};
@@ -90,7 +90,7 @@ export async function renderWallets() {
       const vault = vaultMap[w.vaultId];
       const vaultName = vault?.name || 'Unassigned';
       return `
-        <tr data-chain="${w.chain}" data-status="${w.status}" data-name="${w.name.toLowerCase()}" data-address="${w.address.toLowerCase()}" data-vault="${vaultName.toLowerCase()}" data-balance="${w.balance}">
+        <tr data-chain="${w.chain}" data-status="${w.status}" data-name="${(w.name || '').toLowerCase()}" data-address="${(w.address || '').toLowerCase()}" data-vault="${vaultName.toLowerCase()}" data-balance="${w.balance || '0'}">
           <td>
             <div style="display:flex;align-items:center;gap:8px">
               <span class="chain-dot chain-dot-${w.chain}"></span>
@@ -100,8 +100,8 @@ export async function renderWallets() {
           <td><a href="#/vaults/${w.vaultId}" class="text-sm" style="color:var(--text-secondary);text-decoration:none">${vaultName}</a></td>
           <td style="text-transform:capitalize">${w.chain}</td>
           <td>
-            <span class="mono text-sm">${w.address.substring(0, 16)}...</span>
-            <button class="copy-btn" onclick="navigator.clipboard.writeText('${w.address}').then(()=>{this.textContent='Copied';setTimeout(()=>{this.textContent='Copy'},1000)})">Copy</button>
+            <span class="mono text-sm">${w.address ? w.address.substring(0, 16) + '...' : '—'}</span>
+            ${w.address ? `<button class="copy-btn" onclick="navigator.clipboard.writeText('${w.address}').then(()=>{this.textContent='Copied';setTimeout(()=>{this.textContent='Copy'},1000)})">Copy</button>` : ''}
           </td>
           <td class="mono">${formatAmount(w.balance, w.currency)}</td>
           <td>${w.hdVersion

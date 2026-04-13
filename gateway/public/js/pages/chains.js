@@ -1,7 +1,11 @@
 import { api } from '../api.js';
 
 export async function renderChains() {
-  const { chains } = await api.getOpsChains();
+  let chains = [];
+  try {
+    const result = await api.getOpsChains();
+    chains = result.chains || [];
+  } catch { chains = []; }
 
   if (chains.length === 0) {
     return `<div class="card"><div class="empty-state"><h3>No chains configured</h3><p>Set RPC URLs in the gateway environment variables.</p></div></div>`;

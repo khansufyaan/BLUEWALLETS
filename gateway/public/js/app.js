@@ -21,6 +21,17 @@ import { renderApiKeys, initApiKeys } from './pages/api-keys.js';
 import { renderTestExercise, initTestExercise } from './pages/test-exercise.js';
 import { renderApiDocs, renderWhitepaper } from './pages/docs-viewer.js';
 
+// Page imports — new features
+import { renderRealtimeDashboard, initRealtimeDashboard, destroyRealtimeDashboard } from './pages/realtime-dashboard.js';
+import { renderAuditLog, initAuditLog } from './pages/audit-log.js';
+import { renderMultiChain, initMultiChain } from './pages/multi-chain.js';
+import { renderWebhooks, initWebhooks } from './pages/webhooks.js';
+import { renderTxBuilder, initTxBuilder } from './pages/tx-builder.js';
+import { renderRiskDashboard, initRiskDashboard } from './pages/risk-dashboard.js';
+import { renderKeyCeremony, initKeyCeremony } from './pages/key-ceremony.js';
+import { renderHsmHealth, initHsmHealth, destroyHsmHealth } from './pages/hsm-health.js';
+import { renderMultisig, initMultisig } from './pages/multisig.js';
+
 // Page imports — management (proxied from Driver)
 import { renderDashboard } from './pages/dashboard.js';
 import { renderWallets, initWallets } from './pages/wallets.js';
@@ -54,6 +65,15 @@ const TITLES = {
   'test-exercise': 'Test Exercise',
   'api-docs':      'API Documentation',
   'whitepaper':    'White Paper',
+  'realtime':      'Live Dashboard',
+  'audit-log':     'Audit Log',
+  'multi-chain':   'Multi-Chain View',
+  'webhooks':      'Webhooks',
+  'tx-builder':    'Transaction Builder',
+  'risk':          'Risk Dashboard',
+  'key-ceremony':  'Key Ceremony',
+  'hsm-health':    'HSM Health',
+  'multisig':      'Approvals',
 };
 
 let _currentUser = null;
@@ -61,6 +81,25 @@ let _authCheckedAt = 0;
 const AUTH_CACHE_MS = 30_000; // re-verify session at most every 30s
 
 async function checkAuth() {
+  // Dev mode: bypass auth entirely when no backend is running.
+  // Detects static file servers (Python, serve, etc.) by checking for /health JSON endpoint.
+  if (!window.__devAuthChecked) {
+    window.__devAuthChecked = true;
+    try {
+      const probe = await fetch('/health', { signal: AbortSignal.timeout(2000) });
+      const ct = probe.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) throw new Error('not json');
+      window.__hasBackend = true;
+    } catch {
+      window.__hasBackend = false;
+    }
+  }
+  if (window.__hasBackend === false) {
+    _currentUser = { username: 'admin', displayName: 'Admin (Dev)' };
+    _authCheckedAt = Date.now();
+    return true;
+  }
+
   const token = getSessionToken();
   if (!token) return false;
 
@@ -195,6 +234,33 @@ async function route() {
       pageContent.innerHTML = await renderApiDocs();
     } else if (page === 'whitepaper') {
       pageContent.innerHTML = await renderWhitepaper();
+    } else if (page === 'realtime') {
+      pageContent.innerHTML = await renderRealtimeDashboard();
+      initRealtimeDashboard();
+    } else if (page === 'audit-log') {
+      pageContent.innerHTML = await renderAuditLog();
+      initAuditLog();
+    } else if (page === 'multi-chain') {
+      pageContent.innerHTML = await renderMultiChain();
+      initMultiChain();
+    } else if (page === 'webhooks') {
+      pageContent.innerHTML = await renderWebhooks();
+      initWebhooks();
+    } else if (page === 'tx-builder') {
+      pageContent.innerHTML = await renderTxBuilder();
+      initTxBuilder();
+    } else if (page === 'risk') {
+      pageContent.innerHTML = await renderRiskDashboard();
+      initRiskDashboard();
+    } else if (page === 'key-ceremony') {
+      pageContent.innerHTML = await renderKeyCeremony();
+      initKeyCeremony();
+    } else if (page === 'hsm-health') {
+      pageContent.innerHTML = await renderHsmHealth();
+      initHsmHealth();
+    } else if (page === 'multisig') {
+      pageContent.innerHTML = await renderMultisig();
+      initMultisig();
     } else {
       pageContent.innerHTML = '<div class="empty-state"><h3>Page not found</h3></div>';
     }

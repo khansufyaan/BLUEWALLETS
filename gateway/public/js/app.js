@@ -31,6 +31,7 @@ import { renderRiskDashboard, initRiskDashboard } from './pages/risk-dashboard.j
 import { renderKeyCeremony, initKeyCeremony } from './pages/key-ceremony.js';
 import { renderHsmHealth, initHsmHealth, destroyHsmHealth } from './pages/hsm-health.js';
 import { renderMultisig, initMultisig } from './pages/multisig.js';
+import { renderAutomations, initAutomations } from './pages/automations.js';
 
 // Page imports — management (proxied from Driver)
 import { renderDashboard } from './pages/dashboard.js';
@@ -74,6 +75,7 @@ const TITLES = {
   'key-ceremony':  'Key Ceremony',
   'hsm-health':    'HSM Health',
   'multisig':      'Approvals',
+  'automations':   'Automations',
 };
 
 let _currentUser = null;
@@ -261,6 +263,9 @@ async function route() {
     } else if (page === 'multisig') {
       pageContent.innerHTML = await renderMultisig();
       initMultisig();
+    } else if (page === 'automations') {
+      pageContent.innerHTML = await renderAutomations();
+      initAutomations();
     } else {
       pageContent.innerHTML = '<div class="empty-state"><h3>Page not found</h3></div>';
     }

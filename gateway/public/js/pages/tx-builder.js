@@ -1,15 +1,15 @@
 /**
  * Transaction Builder Wizard
  *
- * Step-by-step wizard for building and signing transactions.
- * Includes compliance checks, gas estimation, and signing pipeline animation.
+ * Step-by-step wizard for building and executing real transfers.
+ * Calls the actual transfer API — no simulated data.
  */
 
 import { api } from '../api.js';
-import { animatePipeline, particleBurst, shakeElement } from '../animations.js';
+import { shakeElement } from '../animations.js';
 
 let _currentStep = 0;
-const STEPS = ['Select Wallet', 'Destination', 'Amount & Gas', 'Review', 'Sign & Broadcast'];
+const STEPS = ['Select Wallet', 'Destination', 'Amount', 'Review & Submit'];
 
 function renderStepIndicator(current) {
   return `
@@ -26,12 +26,9 @@ function renderStepIndicator(current) {
 }
 
 export async function renderTxBuilder() {
-  let wallets = [], chains = [];
+  let wallets = [];
   try {
-    [wallets, chains] = await Promise.all([
-      api.getWallets().catch(() => []),
-      api.getOpsChains().then(d => d.chains || d || []).catch(() => []),
-    ]);
+    wallets = await api.getWallets().catch(() => []);
   } catch {}
 
   return `
@@ -39,7 +36,7 @@ export async function renderTxBuilder() {
       ${renderStepIndicator(0)}
 
       <div class="txb-body">
-        <!-- Step 0: Select Wallet -->
+        <!-- Step 0: Select Source Wallet -->
         <div class="txb-panel" id="txb-step-0">
           <div class="card">
             <h3 style="margin-bottom:var(--sp-4)">Select Source Wallet</h3>
@@ -47,7 +44,7 @@ export async function renderTxBuilder() {
               <label class="form-label">Wallet</label>
               <select id="txb-wallet" class="form-input">
                 <option value="">Choose a wallet...</option>
-                ${wallets.map(w => `<option value="${w.id}" data-chain="${w.chain || ''}" data-balance="${w.balance || 0}" data-currency="${w.currency || ''}" data-address="${w.address || ''}">${w.name || w.id} (${w.chain || 'unknown'}) — ${parseFloat(w.balance || 0).toFixed(4)} ${w.currency || ''}</option>`).join('')}
+                ${wallets.map(w => `<option value="${w.id}" data-chain="${w.chain || ''}" data-balance="${w.balance || 0}" data-currency="${w.currency || ''}" data-address="${w.address || ''}" data-name="${w.name || w.id}">${w.name || w.id} (${w.chain || 'unknown'}) — ${parseFloat(w.balance || 0).toFixed(4)} ${w.currency || ''}</option>`).join('')}
               </select>
             </div>
             <div id="txb-wallet-info" style="display:none" class="alert alert-info">
@@ -66,109 +63,66 @@ export async function renderTxBuilder() {
         <!-- Step 1: Destination -->
         <div class="txb-panel" id="txb-step-1" style="display:none">
           <div class="card">
-            <h3 style="margin-bottom:var(--sp-4)">Destination Address</h3>
+            <h3 style="margin-bottom:var(--sp-4)">Destination</h3>
             <div class="form-group">
-              <label class="form-label">Recipient Address</label>
-              <input type="text" id="txb-to" class="form-input mono" placeholder="0x...">
-              <div class="form-hint">Enter the destination address on the same chain.</div>
-            </div>
-            <div id="txb-compliance-check" style="display:none">
-              <div class="alert" id="txb-compliance-result"></div>
+              <label class="form-label">Destination Wallet</label>
+              <select id="txb-dest" class="form-input">
+                <option value="">Choose destination wallet...</option>
+                ${wallets.map(w => `<option value="${w.id}" data-address="${w.address || ''}" data-name="${w.name || w.id}">${w.name || w.id} (${w.chain || 'unknown'})</option>`).join('')}
+              </select>
+              <div class="form-hint">Select the wallet to receive funds.</div>
             </div>
             <div class="form-actions">
               <button class="btn" id="txb-back-1">Back</button>
-              <button class="btn btn-primary" id="txb-next-1" disabled>Check & Continue</button>
+              <button class="btn btn-primary" id="txb-next-1" disabled>Continue</button>
             </div>
           </div>
         </div>
 
-        <!-- Step 2: Amount & Gas -->
+        <!-- Step 2: Amount -->
         <div class="txb-panel" id="txb-step-2" style="display:none">
           <div class="card">
-            <h3 style="margin-bottom:var(--sp-4)">Amount & Gas</h3>
-            <div class="form-row">
-              <div class="form-group">
-                <label class="form-label">Amount</label>
-                <input type="number" id="txb-amount" class="form-input mono" step="any" min="0" placeholder="0.0">
-                <div class="form-hint">Available: <span id="txb-avail">—</span></div>
-              </div>
-              <div class="form-group">
-                <label class="form-label">Gas Priority</label>
-                <select id="txb-gas-priority" class="form-input">
-                  <option value="low">Low — Slower</option>
-                  <option value="medium" selected>Medium — Standard</option>
-                  <option value="high">High — Fast</option>
-                </select>
-              </div>
+            <h3 style="margin-bottom:var(--sp-4)">Transfer Amount</h3>
+            <div class="form-group">
+              <label class="form-label">Amount (smallest unit)</label>
+              <input type="text" id="txb-amount" class="form-input mono" pattern="\\d+" placeholder="e.g. 1000000">
+              <div class="form-hint">Enter amount in the smallest unit (wei, satoshi, lamport, etc.). Available: <span id="txb-avail">—</span></div>
             </div>
-            <div class="alert alert-info" id="txb-gas-estimate">
-              Estimated gas: <strong>—</strong>
+            <div class="form-group">
+              <label class="form-label">Currency</label>
+              <input type="text" id="txb-currency" class="form-input mono" readonly>
+            </div>
+            <div class="form-group">
+              <label class="form-label">Memo (optional)</label>
+              <input type="text" id="txb-memo" class="form-input" placeholder="Optional note for this transfer">
             </div>
             <div class="form-actions">
               <button class="btn" id="txb-back-2">Back</button>
-              <button class="btn btn-primary" id="txb-next-2">Review Transaction</button>
+              <button class="btn btn-primary" id="txb-next-2">Review</button>
             </div>
           </div>
         </div>
 
-        <!-- Step 3: Review -->
+        <!-- Step 3: Review & Submit -->
         <div class="txb-panel" id="txb-step-3" style="display:none">
           <div class="card">
-            <h3 style="margin-bottom:var(--sp-4)">Review Transaction</h3>
+            <h3 style="margin-bottom:var(--sp-4)">Review Transfer</h3>
             <div class="txb-review">
-              <div class="txb-review-row"><span class="text-muted">From</span><span class="mono" id="txb-rev-from">—</span></div>
-              <div class="txb-review-row"><span class="text-muted">To</span><span class="mono" id="txb-rev-to">—</span></div>
+              <div class="txb-review-row"><span class="text-muted">From</span><span id="txb-rev-from">—</span></div>
+              <div class="txb-review-row"><span class="text-muted">From Address</span><span class="mono text-sm" id="txb-rev-from-addr">—</span></div>
+              <div class="txb-review-row"><span class="text-muted">To</span><span id="txb-rev-to">—</span></div>
+              <div class="txb-review-row"><span class="text-muted">To Address</span><span class="mono text-sm" id="txb-rev-to-addr">—</span></div>
               <div class="txb-review-row"><span class="text-muted">Amount</span><span class="mono" id="txb-rev-amount">—</span></div>
               <div class="txb-review-row"><span class="text-muted">Chain</span><span id="txb-rev-chain">—</span></div>
-              <div class="txb-review-row"><span class="text-muted">Gas Priority</span><span id="txb-rev-gas">—</span></div>
-              <div class="txb-review-row"><span class="text-muted">Estimated Fee</span><span class="mono" id="txb-rev-fee">—</span></div>
+              ${'' /* no gas estimate — we don't know it */}
             </div>
+            <div class="alert alert-info" style="margin-top:var(--sp-4)">
+              This will execute a real transfer via the HSM signing pipeline. The transaction will be submitted to the Driver for policy checks, compliance screening, and HSM signing.
+            </div>
+            <div id="txb-submit-result" style="margin-top:var(--sp-3)"></div>
             <div class="form-actions">
               <button class="btn" id="txb-back-3">Back</button>
-              <button class="btn btn-primary" id="txb-next-3">Sign & Broadcast</button>
-            </div>
-          </div>
-        </div>
-
-        <!-- Step 4: Sign & Broadcast -->
-        <div class="txb-panel" id="txb-step-4" style="display:none">
-          <div class="card" style="text-align:center">
-            <h3 style="margin-bottom:var(--sp-6)">Signing Pipeline</h3>
-            <div class="txb-pipeline" id="txb-pipeline">
-              <div class="pipeline-step">
-                <div class="pipeline-dot"></div>
-                <div class="pipeline-label">Compliance Check</div>
-                <div class="pipeline-connector"></div>
-              </div>
-              <div class="pipeline-step">
-                <div class="pipeline-dot"></div>
-                <div class="pipeline-label">Policy Validation</div>
-                <div class="pipeline-connector"></div>
-              </div>
-              <div class="pipeline-step">
-                <div class="pipeline-dot"></div>
-                <div class="pipeline-label">HSM Signing</div>
-                <div class="pipeline-connector"></div>
-              </div>
-              <div class="pipeline-step">
-                <div class="pipeline-dot"></div>
-                <div class="pipeline-label">Broadcasting</div>
-                <div class="pipeline-connector"></div>
-              </div>
-              <div class="pipeline-step">
-                <div class="pipeline-dot"></div>
-                <div class="pipeline-label">Confirmed</div>
-              </div>
-            </div>
-            <div id="txb-result" style="margin-top:var(--sp-6);display:none">
-              <div class="alert alert-success">
-                Transaction broadcast successfully!
-              </div>
-              <div class="mono text-xs" id="txb-result-hash" style="margin-top:var(--sp-2)">—</div>
-              <div class="form-actions" style="justify-content:center;margin-top:var(--sp-4)">
-                <button class="btn btn-primary" id="txb-new">New Transaction</button>
-                <a class="btn" href="#/transactions">View Transactions</a>
-              </div>
+              <button class="btn btn-primary" id="txb-submit">Submit Transfer</button>
             </div>
           </div>
         </div>
@@ -187,10 +141,11 @@ export function initTxBuilder() {
     const info = document.getElementById('txb-wallet-info');
     const nextBtn = document.getElementById('txb-next-0');
     if (opt?.value) {
-      document.getElementById('txb-wallet-bal').textContent = `${parseFloat(opt.dataset.balance).toFixed(4)} ${opt.dataset.currency}`;
+      document.getElementById('txb-wallet-bal').textContent = `${opt.dataset.balance} ${opt.dataset.currency}`;
       document.getElementById('txb-wallet-chain').textContent = opt.dataset.chain;
       document.getElementById('txb-wallet-addr').textContent = opt.dataset.address;
-      document.getElementById('txb-avail').textContent = `${parseFloat(opt.dataset.balance).toFixed(4)} ${opt.dataset.currency}`;
+      document.getElementById('txb-avail').textContent = `${opt.dataset.balance} ${opt.dataset.currency}`;
+      document.getElementById('txb-currency').value = opt.dataset.currency;
       info.style.display = '';
       nextBtn.disabled = false;
     } else {
@@ -199,10 +154,9 @@ export function initTxBuilder() {
     }
   });
 
-  // Destination address validation
-  document.getElementById('txb-to')?.addEventListener('input', (e) => {
-    const addr = e.target.value.trim();
-    document.getElementById('txb-next-1').disabled = addr.length < 10;
+  // Destination selection
+  document.getElementById('txb-dest')?.addEventListener('change', (e) => {
+    document.getElementById('txb-next-1').disabled = !e.target.value;
   });
 
   // Navigation
@@ -212,7 +166,6 @@ export function initTxBuilder() {
       const panel = document.getElementById(`txb-step-${i}`);
       if (panel) panel.style.display = i === n ? '' : 'none';
     }
-    // Update step indicator
     document.querySelectorAll('.txb-step').forEach((el, i) => {
       el.classList.toggle('txb-step-done', i < n);
       el.classList.toggle('txb-step-active', i === n);
@@ -224,56 +177,70 @@ export function initTxBuilder() {
 
   document.getElementById('txb-next-0')?.addEventListener('click', () => goStep(1));
   document.getElementById('txb-back-1')?.addEventListener('click', () => goStep(0));
-  document.getElementById('txb-next-1')?.addEventListener('click', () => {
-    // Simulate compliance check
-    const check = document.getElementById('txb-compliance-check');
-    const result = document.getElementById('txb-compliance-result');
-    check.style.display = '';
-    result.className = 'alert alert-info';
-    result.textContent = 'Screening address...';
-    setTimeout(() => {
-      result.className = 'alert alert-success';
-      result.textContent = 'Address passed compliance screening.';
-      setTimeout(() => goStep(2), 500);
-    }, 1000);
-  });
+  document.getElementById('txb-next-1')?.addEventListener('click', () => goStep(2));
   document.getElementById('txb-back-2')?.addEventListener('click', () => goStep(1));
   document.getElementById('txb-next-2')?.addEventListener('click', () => {
-    // Populate review
-    const opt = document.getElementById('txb-wallet')?.selectedOptions[0];
-    document.getElementById('txb-rev-from').textContent = opt?.dataset.address || '—';
-    document.getElementById('txb-rev-to').textContent = document.getElementById('txb-to')?.value || '—';
-    document.getElementById('txb-rev-amount').textContent = `${document.getElementById('txb-amount')?.value || '0'} ${opt?.dataset.currency || ''}`;
-    document.getElementById('txb-rev-chain').textContent = opt?.dataset.chain || '—';
-    document.getElementById('txb-rev-gas').textContent = document.getElementById('txb-gas-priority')?.value || 'medium';
-    document.getElementById('txb-rev-fee').textContent = '~0.002 ETH';
+    const srcOpt = document.getElementById('txb-wallet')?.selectedOptions[0];
+    const dstOpt = document.getElementById('txb-dest')?.selectedOptions[0];
+    document.getElementById('txb-rev-from').textContent = srcOpt?.dataset.name || '—';
+    document.getElementById('txb-rev-from-addr').textContent = srcOpt?.dataset.address || '—';
+    document.getElementById('txb-rev-to').textContent = dstOpt?.dataset.name || '—';
+    document.getElementById('txb-rev-to-addr').textContent = dstOpt?.dataset.address || '—';
+    document.getElementById('txb-rev-amount').textContent = `${document.getElementById('txb-amount')?.value || '0'} ${document.getElementById('txb-currency')?.value || ''}`;
+    document.getElementById('txb-rev-chain').textContent = srcOpt?.dataset.chain || '—';
     goStep(3);
   });
   document.getElementById('txb-back-3')?.addEventListener('click', () => goStep(2));
 
-  // Sign & Broadcast
-  document.getElementById('txb-next-3')?.addEventListener('click', async () => {
-    goStep(4);
-    const pipeline = document.getElementById('txb-pipeline');
-    animatePipeline(pipeline);
+  // Submit — calls the real API
+  document.getElementById('txb-submit')?.addEventListener('click', async () => {
+    const submitBtn = document.getElementById('txb-submit');
+    const resultDiv = document.getElementById('txb-submit-result');
+    const walletId = document.getElementById('txb-wallet')?.value;
+    const toWalletId = document.getElementById('txb-dest')?.value;
+    const amount = document.getElementById('txb-amount')?.value;
+    const currency = document.getElementById('txb-currency')?.value;
+    const memo = document.getElementById('txb-memo')?.value;
 
-    // Simulate signing process
-    setTimeout(() => {
-      document.getElementById('txb-result').style.display = '';
-      document.getElementById('txb-result-hash').textContent = '0x' + Array.from(crypto.getRandomValues(new Uint8Array(32))).map(b => b.toString(16).padStart(2, '0')).join('');
-      // Trigger particle burst
-      const rect = pipeline.getBoundingClientRect();
-      const pageContent = document.getElementById('page-content');
-      particleBurst(rect.left + rect.width / 2 - pageContent.getBoundingClientRect().left, rect.top + rect.height / 2 - pageContent.getBoundingClientRect().top, pageContent);
-    }, 3500);
-  });
+    if (!walletId || !toWalletId || !amount) {
+      resultDiv.innerHTML = '<div class="alert alert-error">Missing required fields.</div>';
+      return;
+    }
 
-  // New transaction
-  document.getElementById('txb-new')?.addEventListener('click', () => {
-    goStep(0);
-    document.getElementById('txb-result').style.display = 'none';
-    document.querySelectorAll('.pipeline-step').forEach(s => s.classList.remove('pipeline-active'));
-    document.querySelectorAll('.pipeline-dot').forEach(d => d.classList.remove('pipeline-dot-pulse'));
-    document.querySelectorAll('.pipeline-connector').forEach(c => c.classList.remove('pipeline-connector-filled'));
+    submitBtn.disabled = true;
+    submitBtn.textContent = 'Submitting...';
+    resultDiv.innerHTML = '';
+
+    try {
+      const tx = await api.transfer(walletId, {
+        toWalletId,
+        amount: parseInt(amount, 10),
+        currency,
+        memo: memo || undefined,
+      });
+
+      const status = tx.status || 'submitted';
+      const isOk = status === 'completed';
+      const isRejected = status === 'rejected';
+
+      resultDiv.innerHTML = `
+        <div class="alert ${isOk ? 'alert-success' : isRejected ? 'alert-error' : 'alert-info'}">
+          <strong>Transfer ${status}</strong>
+          ${tx.id ? `<div class="mono text-xs" style="margin-top:4px">TX ID: ${tx.id}</div>` : ''}
+          ${tx.signature ? `<div class="mono text-xs" style="margin-top:2px">Signature: ${tx.signature.substring(0, 32)}...</div>` : ''}
+          ${tx.failureReason ? `<div style="margin-top:4px">${tx.failureReason}</div>` : ''}
+        </div>
+        <div class="form-actions" style="margin-top:var(--sp-3)">
+          <button class="btn btn-primary" onclick="location.hash='#/transactions'">View Transactions</button>
+          <button class="btn" onclick="location.reload()">New Transfer</button>
+        </div>
+      `;
+      submitBtn.style.display = 'none';
+      document.getElementById('txb-back-3').style.display = 'none';
+    } catch (err) {
+      resultDiv.innerHTML = `<div class="alert alert-error">${err.message}</div>`;
+      submitBtn.disabled = false;
+      submitBtn.textContent = 'Submit Transfer';
+    }
   });
 }

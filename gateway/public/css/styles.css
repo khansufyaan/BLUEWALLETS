@@ -1155,10 +1155,89 @@ tr:hover td { background: var(--bg-hover); }
 .ms-approved { background: var(--emerald-bg); color: var(--emerald); }
 .ms-waiting { background: var(--bg-elevated); color: var(--text-tertiary); }
 
+/* ─── Automations (When → If → Then) ─────────────────────── */
+.auto-page { animation: fadeIn 0.3s ease; }
+.auto-card { transition: all 0.3s ease; }
+.auto-card-inactive { opacity: 0.5; }
+.auto-card-header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: var(--sp-4);
+}
+
+/* Toggle switch */
+.auto-toggle { position: relative; display: inline-block; width: 36px; height: 20px; }
+.auto-toggle-input { opacity: 0; width: 0; height: 0; }
+.auto-toggle-slider {
+  position: absolute; cursor: pointer; inset: 0;
+  background: var(--bg-elevated); border: 1px solid var(--border);
+  border-radius: var(--r-full); transition: all 0.2s;
+}
+.auto-toggle-slider::before {
+  content: ''; position: absolute; height: 14px; width: 14px;
+  left: 2px; bottom: 2px; border-radius: 50%;
+  background: var(--text-tertiary); transition: all 0.2s;
+}
+.auto-toggle-input:checked + .auto-toggle-slider { background: var(--blue-600); border-color: var(--blue-600); }
+.auto-toggle-input:checked + .auto-toggle-slider::before { transform: translateX(16px); background: white; }
+
+/* When → If → Then flow */
+.auto-flow {
+  display: flex; flex-direction: column; align-items: center; gap: 0;
+}
+.auto-flow-step { width: 100%; }
+.auto-flow-label {
+  font-size: 11px; font-weight: 600; text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--text-tertiary);
+  margin-bottom: var(--sp-1);
+}
+.auto-flow-box {
+  display: flex; align-items: center; gap: var(--sp-3);
+  padding: var(--sp-3) var(--sp-4);
+  border-radius: var(--r-md); border: 1px solid var(--border);
+  background: var(--bg-elevated); font-size: 13px;
+}
+.auto-flow-when { border-left: 3px solid var(--blue-400); }
+.auto-flow-if { border-left: 3px solid var(--amber); }
+.auto-flow-then { border-left: 3px solid var(--emerald); }
+.auto-flow-icon { font-size: 16px; flex-shrink: 0; }
+
+.auto-flow-connector {
+  width: 2px; height: 16px; background: var(--border);
+  margin: 0 auto;
+}
+
+/* Create modal sections */
+.auto-section {
+  margin: var(--sp-5) 0; padding: var(--sp-4);
+  background: var(--bg-elevated); border-radius: var(--r-lg);
+  border: 1px solid var(--border);
+}
+.auto-section-label {
+  font-size: 14px; font-weight: 600; margin-bottom: var(--sp-1);
+}
+.auto-section-desc {
+  font-size: 12px; color: var(--text-tertiary); margin-bottom: var(--sp-3);
+}
+
+/* Trigger type buttons */
+.auto-trigger-select { display: flex; gap: var(--sp-2); margin-bottom: var(--sp-3); }
+.auto-trigger-btn {
+  flex: 1; display: flex; flex-direction: column; align-items: center; gap: var(--sp-1);
+  padding: var(--sp-3); border: 1px solid var(--border); border-radius: var(--r-md);
+  background: var(--bg-card); cursor: pointer; font-family: inherit;
+  font-size: 13px; color: var(--text-secondary); transition: all 0.15s;
+}
+.auto-trigger-btn:hover { border-color: var(--border-hover); }
+.auto-trigger-btn.active { border-color: var(--blue-500); background: rgba(37,99,235,0.08); color: var(--blue-400); }
+
+/* Amount type tabs */
+.auto-amount-tabs { display: flex; gap: 2px; background: var(--bg-card); border-radius: var(--r-md); padding: 2px; width: fit-content; }
+
 /* ─── Responsive for new features ────────────────────────── */
 @media (max-width: 1024px) {
   .rt-feeds { grid-template-columns: 1fr; }
   .risk-grid { grid-template-columns: 1fr; }
   .txb-steps { flex-wrap: wrap; gap: var(--sp-2); }
   .txb-step-connector { width: 20px; }
+  .auto-trigger-select { flex-direction: column; }
 }

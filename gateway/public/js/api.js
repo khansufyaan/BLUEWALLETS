@@ -166,4 +166,10 @@ export const api = {
   getApprovals:       () => opsRequest(`${OPS_BASE}/approvals`),
   approveRequest:     (id) => fetch(`${OPS_BASE}/approvals/${id}/approve`, { method: 'POST' }).then(r => r.json()),
   rejectRequest:      (id) => fetch(`${OPS_BASE}/approvals/${id}/reject`, { method: 'POST' }).then(r => r.json()),
+
+  // Automations
+  getAutomations:     () => opsRequest(`${OPS_BASE}/automations`),
+  createAutomation:   (body) => fetch(`${OPS_BASE}/automations`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json()),
+  updateAutomation:   (id, body) => fetch(`${OPS_BASE}/automations/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }).then(r => r.json()),
+  deleteAutomation:   (id) => fetch(`${OPS_BASE}/automations/${id}`, { method: 'DELETE' }).then(r => r.json()),
 };

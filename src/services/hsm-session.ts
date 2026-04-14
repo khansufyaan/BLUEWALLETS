@@ -73,7 +73,9 @@ export class HsmSession {
       this.loggedIn = true;
       logger.info('Logged into HSM partition');
     } catch (error) {
-      logger.error('Failed to initialize HSM session', { error });
+      logger.error('Failed to initialize HSM session', {
+        error: error instanceof Error ? { message: error.message, stack: error.stack } : error,
+      });
       await this.cleanup();
       throw error;
     }

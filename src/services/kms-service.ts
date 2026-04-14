@@ -434,29 +434,45 @@ export class KmsService {
     algorithm: KeyAlgorithm,
     hash: Buffer,
   ): Promise<Buffer> {
-    const session = this.hsmSession.getSession();
-    const pkcs11  = this.hsmSession.getPkcs11();
+    // Retry once on PKCS#11 session errors (stale handle after reconnect)
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        const session = this.hsmSession.getSession();
+        const pkcs11  = this.hsmSession.getPkcs11();
 
-    let privateKeyHandle: Buffer;
+        if (wrappedPrivateKeyHex.startsWith('hsm:')) {
+          // Key is stored permanently on the HSM — find by label
+          const label = wrappedPrivateKeyHex.slice(4);
+          const handle = this.findKeyByLabel(label);
+          if (!handle) throw new Error(`HSM key not found: ${label}. HSM may need reconnecting.`);
 
-    if (wrappedPrivateKeyHex.startsWith('hsm:')) {
-      // Key is stored permanently on the HSM — find by label
-      const label = wrappedPrivateKeyHex.slice(4);
-      const handle = this.findKeyByLabel(label);
-      if (!handle) throw new Error(`HSM key not found: ${label}. HSM may need reconnecting.`);
-      privateKeyHandle = handle;
-    } else {
-      // HD mode: wrapped child key in "iv_hex:ciphertext_hex" format
-      return this.unwrapAndSign(wrappedPrivateKeyHex, algorithm, hash);
+          // Sign — private key never leaves HSM
+          pkcs11.C_SignInit(session, { mechanism: pkcs11js.CKM_ECDSA }, handle);
+          const signature = Buffer.from(pkcs11.C_Sign(session, hash, Buffer.alloc(512)));
+
+          // Token keys are persistent — do NOT destroy them
+          logger.debug('Signed with HSM key', { algorithm });
+          return signature;
+        } else {
+          // HD mode: wrapped child key in "iv_hex:ciphertext_hex" format
+          return await this.unwrapAndSign(wrappedPrivateKeyHex, algorithm, hash);
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        // Retry on PKCS#11 session errors (stale session, invalid handle)
+        const isSessionError = /session|CKR_SESSION|CKR_OBJECT_HANDLE|CKR_KEY_HANDLE|CKR_OPERATION|handle/i.test(msg);
+        if (attempt === 0 && isSessionError) {
+          logger.warn('PKCS#11 session error during sign — forcing reconnect and retrying', {
+            error: msg, attempt,
+          });
+          // Force a fresh session by calling getSession() which probes and reconnects
+          this.resetCapabilityCache();
+          continue;
+        }
+        throw err;
+      }
     }
-
-    // Sign — private key never leaves HSM
-    pkcs11.C_SignInit(session, { mechanism: pkcs11js.CKM_ECDSA }, privateKeyHandle);
-    const signature = Buffer.from(pkcs11.C_Sign(session, hash, Buffer.alloc(512)));
-
-    // Token keys are persistent — do NOT destroy them
-    logger.debug('Signed with HSM key', { algorithm });
-    return signature;
+    throw new Error('HSM signing failed after retry');
   }
 
   /** Find a token key on the HSM by its CKA_LABEL. */

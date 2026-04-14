@@ -200,8 +200,11 @@ export class WalletService {
         signature = signResult.signature;
       }
     } catch (error) {
-      logger.error('HSM signing failed', { error, fromWalletId });
-      throw new Error('Transaction signing failed');
+      logger.error('HSM signing failed', {
+        error: error instanceof Error ? { message: error.message, stack: error.stack } : error,
+        fromWalletId,
+      });
+      throw new Error(`Transaction signing failed: ${error instanceof Error ? error.message : 'unknown HSM error'}`);
     }
 
     // Update balances

@@ -1,4 +1,5 @@
 import { v4 as uuidv4 } from 'uuid';
+import crypto from 'crypto';
 import {
   generateRegistrationOptions,
   verifyRegistrationResponse,
@@ -217,7 +218,7 @@ export class AuthService {
     }
 
     const session: Session = {
-      token: uuidv4(),
+      token: crypto.randomBytes(32).toString('hex'),
       userId: user.id,
       username: user.username,
       displayName: user.displayName,

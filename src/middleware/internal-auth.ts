@@ -15,8 +15,8 @@ const INTERNAL_AUTH_KEY = process.env.INTERNAL_AUTH_KEY || '';
 
 export function requireInternalAuth(req: Request, res: Response, next: NextFunction): void {
   if (!INTERNAL_AUTH_KEY) {
-    logger.warn('INTERNAL_AUTH_KEY not set — internal API is unprotected');
-    next();
+    logger.error('INTERNAL_AUTH_KEY not set — rejecting request. Set INTERNAL_AUTH_KEY env var.');
+    res.status(503).json({ error: 'Internal authentication not configured' });
     return;
   }
 

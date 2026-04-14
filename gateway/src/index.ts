@@ -54,8 +54,11 @@ async function main() {
   // ── Bank API (:3100) ──────────────────────────────────────────────────────
   const app = express();
   app.use(helmet());
-  app.use(cors());
-  app.use(express.json());
+  app.use(cors({
+    origin: process.env.CORS_ORIGIN || false,
+    credentials: true,
+  }));
+  app.use(express.json({ limit: '1mb' }));
 
   app.get('/health', async (_req, res) => {
     const signerUp = await signerClient.healthCheck();
@@ -92,8 +95,11 @@ async function main() {
     contentSecurityPolicy: false,
     strictTransportSecurity: false,  // disable HSTS — app serves HTTP, not HTTPS
   }));
-  opsApp.use(cors());
-  opsApp.use(express.json());
+  opsApp.use(cors({
+    origin: process.env.CORS_ORIGIN || false,
+    credentials: true,
+  }));
+  opsApp.use(express.json({ limit: '1mb' }));
 
   // Gas station service
   const gasStation = new GasStation(signerClient);

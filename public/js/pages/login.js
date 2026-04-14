@@ -10,11 +10,11 @@ export function renderLogin() {
         <form id="login-form">
           <div class="form-group">
             <label class="form-label">Email</label>
-            <input type="email" class="form-input" id="login-email" value="admin@bluewallets.io" required>
+            <input type="email" class="form-input" id="login-email" placeholder="you@company.com" required>
           </div>
           <div class="form-group">
             <label class="form-label">Password</label>
-            <input type="password" class="form-input" id="login-password" value="admin" required>
+            <input type="password" class="form-input" id="login-password" placeholder="Enter password" required>
           </div>
           <button type="submit" class="btn btn-primary btn-lg" style="width:100%">Sign In</button>
         </form>

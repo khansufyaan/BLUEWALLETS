@@ -77,21 +77,27 @@ export function initTransfer(fromWalletId) {
       if (tx.status === 'rejected') {
         const evals = (tx.policyEvaluations || [])
           .filter(ev => !ev.passed)
-          .map(ev => `<div style="margin-top:4px">&bull; <strong>${ev.policyName}</strong>: ${ev.reason}</div>`)
+          .map(ev => {
+            const name = (ev.policyName || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
+            const reason = (ev.reason || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
+            return `<div style="margin-top:4px">&bull; <strong>${name}</strong>: ${reason}</div>`;
+          })
           .join('');
         resultDiv.innerHTML = `<div class="alert alert-error">Transfer rejected by policy${evals}</div>`;
         submitBtn.disabled = false;
         submitBtn.textContent = 'Execute Transfer';
       } else {
+        const sig = (tx.signature || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
         resultDiv.innerHTML = `
           <div class="alert alert-success">
             Transfer completed<br>
-            <div class="mono text-xs" style="margin-top:6px">Signature: ${tx.signature.substring(0, 48)}...</div>
+            <div class="mono text-xs" style="margin-top:6px">Signature: ${sig.substring(0, 48)}...</div>
           </div>`;
         submitBtn.textContent = 'Transfer Complete';
       }
     } catch (err) {
-      resultDiv.innerHTML = `<div class="alert alert-error">${err.message}</div>`;
+      const msg = (err.message || 'Unknown error').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
+      resultDiv.innerHTML = `<div class="alert alert-error">${msg}</div>`;
       submitBtn.disabled = false;
       submitBtn.textContent = 'Execute Transfer';
     }

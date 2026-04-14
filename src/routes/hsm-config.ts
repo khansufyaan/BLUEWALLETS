@@ -10,7 +10,11 @@ const changePinSchema = z.object({
 });
 
 const connectSchema = z.object({
-  pkcs11Library: z.string().min(1, 'Library path is required'),
+  pkcs11Library: z.string().min(1, 'Library path is required')
+    .refine(
+      (v) => !v.includes('..') && /^[a-zA-Z0-9_/\-.\s]+\.(so|dylib|dll)$/.test(v),
+      'Library path must be an absolute or relative path to a .so/.dylib/.dll file with no directory traversal',
+    ),
   slotIndex:     z.number().int().min(0).default(0),
   pin:           z.string().min(1, 'PIN is required'),
   label:         z.string().optional(),

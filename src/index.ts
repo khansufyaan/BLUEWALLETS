@@ -110,8 +110,11 @@ async function main() {
   // Create Express app
   const app = express();
   app.use(helmet({ contentSecurityPolicy: false }));
-  app.use(cors());
-  app.use(express.json());
+  app.use(cors({
+    origin: process.env.CORS_ORIGIN || false,
+    credentials: true,
+  }));
+  app.use(express.json({ limit: '1mb' }));
 
   // Health route (public: /health — just the GET /)
   // Additional health sub-routes (logs, restart) live under /api/v1/health (authenticated)

@@ -371,12 +371,7 @@ function renderLoginPage(onAuthenticated) {
           <button id="back-to-username" style="background:none;border:none;color:rgba(255,255,255,0.3);font-size:12px;margin-top:10px;cursor:pointer;display:block;width:100%;text-align:center;font-family:inherit">← Back</button>
         </div>
 
-        <button class="login-hint-toggle" id="hint-toggle">Need login credentials? ›</button>
-        <div class="login-hint-box" id="hint-box">
-          <strong style="color:rgba(255,255,255,0.5)">Default accounts:</strong><br>
-          Admin: <code>admin</code> / <code>Admin1234!</code><br>
-          Officer: <code>officer1</code> / <code>Officer1234!</code>
-        </div>
+        <div class="login-hint-box" id="hint-box" style="display:none"></div>
 
         <div class="login-footer">
           <div class="login-footer-dot"></div>

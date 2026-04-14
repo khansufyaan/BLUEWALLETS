@@ -224,12 +224,14 @@ export function initTransactions() {
     try {
       const result = await api.executeWithdrawal({ walletId, toAddress, amount, chain });
 
+      const esc = s => (s || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
+      const txHash = esc(result.txHash || '');
       resultDiv.innerHTML = `
         <div class="alert alert-success" style="margin-bottom:16px">
           <div style="font-weight:600;margin-bottom:4px">Withdrawal Submitted</div>
           <div style="font-size:12px">
-            ${result.txHash
-              ? `Tx Hash: <a href="https://sepolia.etherscan.io/tx/${result.txHash}" target="_blank" class="mono">${result.txHash.slice(0,16)}...</a>`
+            ${txHash
+              ? `Tx Hash: <span class="mono">${txHash.slice(0,16)}...</span>`
               : 'Transaction submitted to mempool'}
           </div>
         </div>
@@ -242,7 +244,8 @@ export function initTransactions() {
         window.dispatchEvent(new HashChangeEvent('hashchange'));
       }, 2000);
     } catch (err) {
-      resultDiv.innerHTML = `<div class="alert alert-error">${err.message}</div>`;
+      const msg = (err.message || 'Unknown error').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
+      resultDiv.innerHTML = `<div class="alert alert-error">${msg}</div>`;
       btn.disabled = false;
       btn.innerHTML = `
         <svg width="14" height="14" viewBox="0 0 14 14" fill="none" style="margin-right:4px">

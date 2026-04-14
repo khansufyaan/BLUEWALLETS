@@ -21,12 +21,39 @@ function getOrigin(req: Request): string {
   return `${proto}://${req.headers.host}`;
 }
 
+// Simple in-memory rate limiter for auth endpoints
+const _authAttempts = new Map<string, { count: number; resetAt: number }>();
+const AUTH_RATE_WINDOW_MS = 60_000; // 1 minute
+const AUTH_RATE_MAX = 10; // 10 attempts per minute per IP
+
+function authRateLimit(req: Request, res: Response, next: Function): void {
+  const ip = req.ip || req.socket.remoteAddress || 'unknown';
+  const now = Date.now();
+  const entry = _authAttempts.get(ip);
+  if (entry && now < entry.resetAt) {
+    if (entry.count >= AUTH_RATE_MAX) {
+      res.status(429).json({ error: 'Too many authentication attempts. Try again later.' });
+      return;
+    }
+    entry.count++;
+  } else {
+    _authAttempts.set(ip, { count: 1, resetAt: now + AUTH_RATE_WINDOW_MS });
+  }
+  // Cleanup stale entries periodically
+  if (_authAttempts.size > 10000) {
+    for (const [key, val] of _authAttempts) {
+      if (now > val.resetAt) _authAttempts.delete(key);
+    }
+  }
+  next();
+}
+
 export function createAuthRoutes(authService: AuthService): Router {
   const router = Router();
 
   // ── Password Login ────────────────────────────────────────────────────────
 
-  router.post('/login', validate(loginSchema), async (req: Request, res: Response) => {
+  router.post('/login', authRateLimit, validate(loginSchema), async (req: Request, res: Response) => {
     try {
       const { username, password } = req.body as { username: string; password: string };
       const session = await authService.login(username, password);

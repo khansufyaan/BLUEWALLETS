@@ -131,14 +131,16 @@ export function initVaultDetail(vaultId) {
         name: document.getElementById('cw-name').value,
         initialBalance: document.getElementById('cw-balance').value || '0',
       });
+      const addr = (wallet.address || '').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
       resultDiv.innerHTML = `
         <div class="alert alert-success">
           Wallet created!<br>
-          <div class="address-display" style="margin-top:8px;font-size:12px">${wallet.address}</div>
+          <div class="address-display" style="margin-top:8px;font-size:12px">${addr}</div>
         </div>`;
       setTimeout(() => window.dispatchEvent(new HashChangeEvent('hashchange')), 1000);
     } catch (err) {
-      resultDiv.innerHTML = `<div class="alert alert-error">${err.message}</div>`;
+      const msg = (err.message || 'Unknown error').replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
+      resultDiv.innerHTML = `<div class="alert alert-error">${msg}</div>`;
       submitBtn.disabled = false;
       submitBtn.textContent = 'Create Wallet';
     }

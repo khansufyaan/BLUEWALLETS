@@ -1,17 +1,16 @@
 # Blue Agent stack — AI agent with fully on-prem LLM
 #
-# Runs alongside the main blue stack. Start with:
+# Quick start (POC, CPU, default Qwen 7B ~5GB):
 #   docker-compose -f docker-compose.yml -f docker-compose.agent.yml up -d
 #
-# For GPU inference (recommended for production), uncomment the `deploy` section
-# under ollama and ensure nvidia-container-toolkit is installed on the host.
+# Production (GPU, Llama 70B):
+#   cp .env.agent.production .env.agent
+#   docker-compose -f docker-compose.yml -f docker-compose.agent.yml -f docker-compose.agent.gpu.yml up -d
 
 version: '3.8'
 
 services:
   # Ollama — on-prem LLM server (OpenAI-compatible API)
-  # Default model: qwen2.5:7b-instruct (~5GB, runs on CPU or 8GB GPU)
-  # Upgrade for production: llama3.1:70b-instruct-q4_K_M (requires 48GB+ VRAM)
   ollama:
     image: ollama/ollama:latest
     container_name: blue-ollama
@@ -20,18 +19,12 @@ services:
     environment:
       OLLAMA_HOST: 0.0.0.0
       OLLAMA_KEEP_ALIVE: 24h
-      # Restrict model list to pre-pulled models only (no internet egress needed after initial pull)
+      OLLAMA_MAX_LOADED_MODELS: "${OLLAMA_MAX_LOADED_MODELS:-1}"
+      OLLAMA_NUM_PARALLEL: "${OLLAMA_NUM_PARALLEL:-2}"
+      OLLAMA_FLASH_ATTENTION: "1"
       OLLAMA_MODELS: /root/.ollama/models
     ports:
       - "11434:11434"
-    # GPU support (uncomment for NVIDIA GPU):
-    # deploy:
-    #   resources:
-    #     reservations:
-    #       devices:
-    #         - driver: nvidia
-    #           count: 1
-    #           capabilities: [gpu]
     networks:
       - blue-internal
     healthcheck:
@@ -39,8 +32,9 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
+    restart: unless-stopped
 
-  # Pull the model on first boot (one-shot, then exits)
+  # Pull model on first boot (one-shot)
   ollama-init:
     image: ollama/ollama:latest
     depends_on:
@@ -48,8 +42,11 @@ services:
         condition: service_healthy
     entrypoint: /bin/sh
     command: >
-      -c "ollama pull qwen2.5:7b-instruct || true;
-          echo 'Model ready.'"
+      -c "
+        echo 'Pulling model: ${LLM_MODEL:-qwen2.5:7b-instruct}';
+        ollama pull ${LLM_MODEL:-qwen2.5:7b-instruct} || true;
+        echo 'Model ready.';
+      "
     environment:
       OLLAMA_HOST: http://ollama:11434
     networks:
@@ -68,15 +65,16 @@ services:
     environment:
       AGENT_PORT: 3500
       LLM_URL: http://ollama:11434/v1
-      LLM_MODEL: qwen2.5:7b-instruct
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b-instruct}
       LLM_API_KEY: ollama
+      LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-2048}
       GATEWAY_URL: http://blue-gateway:3400
       DRIVER_URL: http://blue-driver:3100
       INTERNAL_AUTH_KEY: ${INTERNAL_AUTH_KEY:-}
       AGENT_AUTH_KEY: ${AGENT_AUTH_KEY:-}
-      ALLOW_WRITE_TOOLS: "true"
-      REQUIRE_APPROVAL: "true"
-      LOG_LEVEL: info
+      ALLOW_WRITE_TOOLS: "${ALLOW_WRITE_TOOLS:-true}"
+      REQUIRE_APPROVAL: "${REQUIRE_APPROVAL:-true}"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3400}
     ports:
       - "3500:3500"
@@ -96,5 +94,5 @@ volumes:
 networks:
   blue-internal:
     driver: bridge
-    # For true air-gap, set internal: true (prevents any internet egress)
+    # For air-gap deployments, set internal: true
     # internal: true

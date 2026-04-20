@@ -58,22 +58,37 @@ export class LlmClient {
       stream: false,
     };
 
-    const res = await fetch(`${config.llmUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.llmApiKey}`,
-      },
-      body: JSON.stringify(body),
-    });
+    // Large models (70B) can take 30-60s for a full response.
+    // Allow up to 3 minutes before giving up.
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 180_000);
 
-    if (!res.ok) {
-      const text = await res.text();
-      logger.error('LLM request failed', { status: res.status, body: text });
-      throw new Error(`LLM error ${res.status}: ${text.slice(0, 200)}`);
+    try {
+      const res = await fetch(`${config.llmUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${config.llmApiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      clearTimeout(timeout);
+
+      if (!res.ok) {
+        const text = await res.text();
+        logger.error('LLM request failed', { status: res.status, body: text.slice(0, 500) });
+        throw new Error(`LLM error ${res.status}: ${text.slice(0, 200)}`);
+      }
+
+      return res.json() as Promise<ChatResponse>;
+    } catch (err) {
+      clearTimeout(timeout);
+      if (err instanceof Error && err.name === 'AbortError') {
+        throw new Error('LLM request timed out after 180s. For 70B models, try reducing max_tokens or check GPU.');
+      }
+      throw err;
     }
-
-    return res.json() as Promise<ChatResponse>;
   }
 
   /** Check if the LLM server is reachable. */

@@ -1,0 +1,35 @@
+# GPU override for Blue Agent — enables NVIDIA GPU passthrough
+#
+# Usage:
+#   cp .env.agent.production .env.agent
+#   docker-compose -f docker-compose.yml \
+#                  -f docker-compose.agent.yml \
+#                  -f docker-compose.agent.gpu.yml up -d
+#
+# Requirements:
+#   - NVIDIA driver installed on host
+#   - nvidia-container-toolkit installed
+#   - Minimum VRAM depends on model:
+#       llama3.1:8b   → 8GB
+#       llama3.1:70b  → 48GB (use 4-bit quantization) or 80GB (fp16)
+#       qwen2.5:32b   → 24GB
+#       qwen2.5:72b   → 48GB
+
+version: '3.8'
+
+services:
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    environment:
+      OLLAMA_HOST: 0.0.0.0
+      OLLAMA_KEEP_ALIVE: 24h
+      OLLAMA_MAX_LOADED_MODELS: "1"
+      OLLAMA_NUM_PARALLEL: "4"
+      OLLAMA_FLASH_ATTENTION: "1"
+      OLLAMA_GPU_OVERHEAD: "2048"  # Reserve 2GB for other GPU users

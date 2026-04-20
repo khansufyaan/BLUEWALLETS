@@ -336,6 +336,52 @@ docker compose up -d
 
 ## Troubleshooting
 
+### Logs show `ECONNREFUSED 192.168.x.x:3200` — "Failed to refresh wallet list from signer"
+
+The Gateway is trying to reach the Driver on its internal mTLS port but can't.
+The Gateway itself IS running (look for "Blue Gateway API running on port 3100"
+earlier in the log), but the Driver container isn't reachable yet.
+
+Check:
+```bash
+docker compose ps                    # Is blue-driver Up and Healthy?
+docker compose logs blue-driver      # What's its state?
+```
+
+Common causes:
+- Driver container is still starting up — wait 60s and check again
+- Driver failed to start because HSM isn't connected — check Driver logs
+- `certs/` directory missing or unreadable — rerun `./setup.sh`
+- Wrong `INTERNAL_AUTH_KEY` — must match in both services (both set from same `.env`)
+
+The Gateway will keep retrying every 15s. Once Driver is up, the logs show:
+"Signer (Driver) now reachable — resumed wallet list refresh"
+
+### Logs show `ENOTFOUND eth-sepolia.g.alchemy.com` — "Failed to initialize deposit monitor"
+
+Your network blocks outbound DNS/HTTPS to public blockchain RPC providers
+(Alchemy, Infura, etc.). This is common in corporate / banking environments.
+
+**Fix:** set `ETH_RPC_URL` in your `.env` to one of:
+- Your internal Ethereum node (e.g. `http://eth-node.internal:8545`)
+- An allowlisted proxy to Alchemy/Infura
+- Leave blank to disable blockchain features entirely:
+  ```
+  ETH_RPC_URL=
+  ```
+
+After editing `.env`:
+```bash
+docker compose restart blue-console
+```
+
+The Gateway now probes RPC endpoints at startup and disables features for
+unreachable chains cleanly (no more log spam). You'll see:
+"RPC unreachable — blockchain features disabled for this chain"
+
+The Console still works fine for wallet/vault management without RPC —
+you just can't see on-chain balances or detect deposits until RPC is wired.
+
 ### `INTERNAL_AUTH_KEY is required` on `docker compose up`
 
 The compose file enforces that secrets are set. You forgot to create `.env`.

@@ -196,16 +196,47 @@ async function main() {
   // Start gas station (will check if configured)
   gasStation.start();
 
-  // Start deposit monitor in background (don't block servers on slow RPC)
-  if (enabledChains.length > 0) {
-    depositMonitor.start(enabledChains).then(() => {
-      logger.info('Deposit monitoring active', { chains: enabledChains });
-    }).catch(err => {
-      logger.warn('Deposit monitor failed to start', { error: err.message });
-    });
-  } else {
-    logger.warn('No EVM chains configured — deposit monitoring disabled');
-  }
+  // Probe RPC endpoints upfront to detect unreachable chains (corporate
+  // firewall, blocked DNS, wrong URL, etc.). Only start the deposit
+  // monitor for chains that are actually reachable — prevents endless
+  // "JsonRpcProvider failed to detect network" retry spam.
+  (async () => {
+    if (enabledChains.length === 0) {
+      logger.warn('No EVM chains configured — deposit monitoring disabled');
+      return;
+    }
+
+    const { probeRpc } = await import('./services/evm/evm-provider');
+    const reachable: string[] = [];
+    for (const chain of enabledChains) {
+      const probe = await probeRpc(chain, 5000);
+      if (probe.ok) {
+        logger.info('RPC reachable', { chain, blockNumber: probe.blockNumber });
+        reachable.push(chain);
+      } else {
+        logger.warn(
+          'RPC unreachable — blockchain features disabled for this chain. ' +
+          'Set the *_RPC_URL env var to your internal RPC endpoint.',
+          { chain, error: probe.error },
+        );
+      }
+    }
+
+    if (reachable.length > 0) {
+      depositMonitor.start(reachable).then(() => {
+        logger.info('Deposit monitoring active', { chains: reachable });
+      }).catch(err => {
+        logger.warn('Deposit monitor failed to start', {
+          error: err instanceof Error ? err.message : err,
+        });
+      });
+    } else {
+      logger.warn(
+        'No RPC endpoints reachable — deposit monitoring disabled. ' +
+        'The Gateway will serve read-only wallet operations only.',
+      );
+    }
+  })();
 
   // Graceful shutdown
   const shutdown = async (signal: string) => {

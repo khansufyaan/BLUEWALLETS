@@ -86,6 +86,8 @@ export class EvmDepositMonitor {
   /**
    * Refresh the list of monitored addresses from the signer.
    */
+  private _signerFailureCount = 0;
+
   async refreshWalletList(): Promise<void> {
     try {
       const wallets = await this.signerClient.listWallets();
@@ -95,9 +97,24 @@ export class EvmDepositMonitor {
           this.monitoredAddresses.set(w.address.toLowerCase(), w.id);
         }
       }
+      if (this._signerFailureCount > 0) {
+        logger.info('Signer (Driver) now reachable — resumed wallet list refresh', {
+          count: this.monitoredAddresses.size,
+        });
+      }
+      this._signerFailureCount = 0;
       logger.debug('Wallet list refreshed', { count: this.monitoredAddresses.size });
     } catch (error) {
-      logger.warn('Failed to refresh wallet list from signer', { error });
+      // Log the first 3 failures, then go quiet to avoid log flooding
+      this._signerFailureCount++;
+      if (this._signerFailureCount <= 3) {
+        logger.warn('Failed to refresh wallet list from signer (Driver not reachable)', {
+          error: error instanceof Error ? error.message : error,
+          attempt: this._signerFailureCount,
+        });
+      } else if (this._signerFailureCount === 4) {
+        logger.warn('Signer still unreachable — suppressing further retry logs until reconnected');
+      }
     }
   }
 

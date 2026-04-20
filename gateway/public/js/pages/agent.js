@@ -266,6 +266,70 @@ export function initAgent() {
     return _conversationId;
   }
 
+  /**
+   * Try the SSE streaming endpoint. Returns true on success, false on failure
+   * (so caller can fall back to non-streaming).
+   */
+  async function tryStreamChat(convId, text, handlers) {
+    const paths = [
+      `${AGENT_BASE}/agent/conversations/${convId}/chat/stream`,
+      `${window.location.origin.replace(/:\d+$/, ':3500')}/agent/conversations/${convId}/chat/stream`,
+    ];
+    for (const url of paths) {
+      try {
+        const res = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+          body: JSON.stringify({ message: text }),
+        });
+        const ct = res.headers.get('content-type') || '';
+        if (!res.ok || !ct.includes('event-stream') || !res.body) continue; // try next URL
+
+        // Parse SSE stream
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let started = false;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          // Split on \n\n (SSE message separator)
+          const messages = buffer.split('\n\n');
+          buffer = messages.pop() || '';
+          for (const msg of messages) {
+            if (!msg.trim()) continue;
+            let event = 'message', data = '';
+            for (const line of msg.split('\n')) {
+              if (line.startsWith('event:')) event = line.slice(6).trim();
+              else if (line.startsWith('data:')) data += line.slice(5).trim();
+            }
+            let payload = null;
+            try { payload = data ? JSON.parse(data) : {}; } catch { /* skip */ }
+            if (payload === null) continue;
+
+            if (event === 'assistant_start') {
+              if (!started) { handlers.onStart(); started = true; }
+              else { handlers.onAssistantDone({ role: 'assistant', content: '' }); handlers.onStart(); }
+            }
+            else if (event === 'assistant_delta' && payload.content) handlers.onDelta(payload.content);
+            else if (event === 'assistant_done') handlers.onAssistantDone(payload.message);
+            else if (event === 'tool_result') handlers.onToolResult(payload);
+            else if (event === 'approval_needed') handlers.onApproval(payload.approval);
+            else if (event === 'error') throw new Error(payload.error || 'stream error');
+            else if (event === 'done') { /* end of stream */ }
+          }
+        }
+        return true;
+      } catch (err) {
+        console.warn('Stream attempt failed:', err.message);
+        continue;
+      }
+    }
+    return false; // all paths failed
+  }
+
   async function sendMessage() {
     const text = input.value.trim();
     if (!text) return;
@@ -286,30 +350,89 @@ export function initAgent() {
     messagesEl.appendChild(thinking);
     messagesEl.scrollTop = messagesEl.scrollHeight;
 
+    let streamingBubble = null; // The DIV for the current streaming assistant message
+    let streamingText = '';
+
     try {
       const convId = await ensureConversation();
-      const data = await agentRequestDirect(`/agent/conversations/${convId}/chat`, {
-        method: 'POST',
-        body: JSON.stringify({ message: text }),
+
+      // Try streaming endpoint first; fall back to non-streaming on failure
+      const streamOk = await tryStreamChat(convId, text, {
+        onStart: () => {
+          thinking.remove();
+          // Create an empty assistant bubble we'll fill as tokens arrive
+          streamingBubble = document.createElement('div');
+          streamingBubble.className = 'agent-msg agent-msg-assistant';
+          streamingBubble.innerHTML = `<div class="agent-msg-body"><span class="agent-streaming-cursor">▍</span></div>`;
+          messagesEl.appendChild(streamingBubble);
+          streamingText = '';
+        },
+        onDelta: (content) => {
+          if (!streamingBubble) return;
+          streamingText += content;
+          const body = streamingBubble.querySelector('.agent-msg-body');
+          body.innerHTML = renderMarkdown(streamingText) + '<span class="agent-streaming-cursor">▍</span>';
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        },
+        onAssistantDone: (msg) => {
+          if (!streamingBubble) return;
+          // Remove cursor, render final markdown + any tool calls
+          const toolCalls = (msg.tool_calls || []).map(tc => `
+            <div class="agent-tool-call">
+              <div class="agent-tool-call-head">Calling <code>${esc(tc.function.name)}</code></div>
+              <pre>${esc(tc.function.arguments)}</pre>
+            </div>
+          `).join('');
+          const body = streamingBubble.querySelector('.agent-msg-body');
+          body.innerHTML = (msg.content ? renderMarkdown(msg.content) : '<em style="opacity:0.6">Planning...</em>') + toolCalls;
+          if (msg.content && window._speak) window._speak(msg.content);
+          streamingBubble = null;
+          streamingText = '';
+        },
+        onToolResult: (evt) => {
+          let parsed;
+          try { parsed = JSON.parse(evt.content); } catch { parsed = evt.content; }
+          const isError = evt.error || (parsed && parsed.error);
+          const preview = typeof parsed === 'object' ? JSON.stringify(parsed, null, 2).slice(0, 500) : String(parsed).slice(0, 500);
+          const div = document.createElement('div');
+          div.className = 'agent-msg agent-msg-tool';
+          div.innerHTML = `
+            <div class="agent-msg-body agent-tool-result ${isError ? 'agent-tool-error' : ''}">
+              <details>
+                <summary>${isError ? '&#9888; Tool error' : '&#10003; Tool result'}</summary>
+                <pre>${esc(preview)}</pre>
+              </details>
+            </div>`;
+          messagesEl.appendChild(div);
+          messagesEl.scrollTop = messagesEl.scrollHeight;
+        },
+        onApproval: (approval) => {
+          _pendingApprovals.push(approval);
+          renderApprovals(_pendingApprovals);
+        },
       });
 
-      thinking.remove();
-
-      // Render new messages (skip the user message we already added)
-      data.messages.forEach(m => {
-        if (m.role === 'user' && m.content === text) return;
-        appendMessage(m);
-      });
-
-      // Handle pending approvals
-      if (data.pendingApprovals && data.pendingApprovals.length > 0) {
-        _pendingApprovals = data.pendingApprovals;
-        renderApprovals(data.pendingApprovals);
+      if (!streamOk) {
+        // Fallback to non-streaming
+        const data = await agentRequestDirect(`/agent/conversations/${convId}/chat`, {
+          method: 'POST',
+          body: JSON.stringify({ message: text }),
+        });
+        thinking.remove();
+        data.messages.forEach(m => {
+          if (m.role === 'user' && m.content === text) return;
+          appendMessage(m);
+        });
+        if (data.pendingApprovals && data.pendingApprovals.length > 0) {
+          _pendingApprovals = data.pendingApprovals;
+          renderApprovals(data.pendingApprovals);
+        }
       }
 
       messagesEl.scrollTop = messagesEl.scrollHeight;
     } catch (err) {
       thinking.remove();
+      if (streamingBubble) streamingBubble.remove();
       appendMessage({ role: 'assistant', content: `⚠️ Error: ${err.message}` });
       shakeElement(sendBtn);
     } finally {

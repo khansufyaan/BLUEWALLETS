@@ -46,7 +46,135 @@ export interface ChatResponse {
   }>;
 }
 
+export interface StreamDelta {
+  content?: string;
+  tool_calls?: Array<{
+    index: number;
+    id?: string;
+    type?: 'function';
+    function?: { name?: string; arguments?: string };
+  }>;
+  finish_reason?: string | null;
+}
+
 export class LlmClient {
+  /**
+   * Stream a chat response as token deltas.
+   * Accumulates tool calls across deltas (they come fragmented).
+   * Yields each delta as it arrives, and returns the final assembled message at end.
+   */
+  async *chatStream(req: ChatRequest): AsyncGenerator<StreamDelta, ChatMessage, unknown> {
+    const body = {
+      model: config.llmModel,
+      messages: req.messages,
+      tools: req.tools,
+      tool_choice: req.tools?.length ? 'auto' : undefined,
+      temperature: req.temperature ?? 0.1,
+      max_tokens: req.max_tokens ?? config.llmMaxTokens,
+      stream: true,
+    };
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 240_000);
+
+    let res: Response;
+    try {
+      res = await fetch(`${config.llmUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${config.llmApiKey}`,
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+    } catch (err) {
+      clearTimeout(timeout);
+      throw err;
+    }
+
+    if (!res.ok) {
+      clearTimeout(timeout);
+      const text = await res.text();
+      throw new Error(`LLM stream error ${res.status}: ${text.slice(0, 200)}`);
+    }
+    if (!res.body) {
+      clearTimeout(timeout);
+      throw new Error('LLM stream has no body');
+    }
+
+    // Assembled final state
+    const finalMsg: ChatMessage = { role: 'assistant', content: '' };
+    const toolCallAccumulator: Map<number, { id: string; name: string; arguments: string }> = new Map();
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        // Split on double-newline (SSE message boundary)
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data:')) continue;
+          const payload = trimmed.slice(5).trim();
+          if (payload === '[DONE]') continue;
+
+          let chunk: any;
+          try { chunk = JSON.parse(payload); } catch { continue; }
+          const delta = chunk?.choices?.[0]?.delta;
+          const finishReason = chunk?.choices?.[0]?.finish_reason;
+          if (!delta && !finishReason) continue;
+
+          // Accumulate content
+          if (delta?.content) {
+            finalMsg.content = (finalMsg.content || '') + delta.content;
+          }
+
+          // Accumulate tool calls (they arrive fragmented by index)
+          if (delta?.tool_calls) {
+            for (const tc of delta.tool_calls) {
+              const idx = tc.index ?? 0;
+              let acc = toolCallAccumulator.get(idx);
+              if (!acc) {
+                acc = { id: tc.id || '', name: '', arguments: '' };
+                toolCallAccumulator.set(idx, acc);
+              }
+              if (tc.id) acc.id = tc.id;
+              if (tc.function?.name) acc.name += tc.function.name;
+              if (tc.function?.arguments) acc.arguments += tc.function.arguments;
+            }
+          }
+
+          yield { content: delta?.content, tool_calls: delta?.tool_calls, finish_reason: finishReason };
+        }
+      }
+    } finally {
+      clearTimeout(timeout);
+      try { reader.releaseLock(); } catch { /* */ }
+    }
+
+    // Assemble final tool_calls on the message
+    if (toolCallAccumulator.size > 0) {
+      finalMsg.tool_calls = Array.from(toolCallAccumulator.entries())
+        .sort(([a], [b]) => a - b)
+        .map(([, tc]) => ({
+          id: tc.id,
+          type: 'function' as const,
+          function: { name: tc.name, arguments: tc.arguments },
+        }));
+    }
+
+    return finalMsg;
+  }
+
   async chat(req: ChatRequest): Promise<ChatResponse> {
     const body = {
       model: config.llmModel,

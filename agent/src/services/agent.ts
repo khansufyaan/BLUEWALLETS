@@ -247,6 +247,175 @@ export class Agent {
   }
 
   /**
+   * Streaming version of chat.
+   * Emits SSE-style events via `onEvent` callback as tokens arrive.
+   * Events:
+   *   user_message:    { content: string }
+   *   assistant_start: {} — new assistant message begins
+   *   assistant_delta: { content: string } — token(s) appended
+   *   assistant_done:  { message: ChatMessage } — assistant turn complete
+   *   tool_call:       { id, name, args } — tool is being invoked
+   *   tool_result:     { id, result } — tool returned (or error)
+   *   approval_needed: { approval }
+   *   error:           { error: string }
+   */
+  async chatStreaming(opts: {
+    conversationId: string;
+    userId: string;
+    userMessage: string;
+    userToken?: string;
+    onEvent: (event: string, data: unknown) => void;
+  }): Promise<void> {
+    const { conversationId, userId, userMessage, userToken, onEvent } = opts;
+    const conv = this.conversations.get(conversationId);
+    if (!conv) throw new Error('Conversation not found');
+
+    // Append user message + emit
+    const userMsg: ChatMessage = { role: 'user', content: userMessage };
+    this.conversations.append(conversationId, userMsg);
+    audit.record({ userId, conversationId, event: 'prompt', data: { content: userMessage } });
+    onEvent('user_message', userMsg);
+
+    // Auto-title from first user message if the conversation is still "New conversation"
+    if (conv.title === 'New conversation' || conv.title === 'New conversation ') {
+      const title = userMessage.slice(0, 50).replace(/\n/g, ' ').trim();
+      if (title.length > 0) this.conversations.updateTitle(conversationId, title);
+    }
+
+    const availableTools = getAvailableTools();
+    const toolDefs = toOpenAIDefinitions(availableTools);
+
+    for (let iter = 0; iter < MAX_ITERATIONS; iter++) {
+      onEvent('assistant_start', {});
+
+      const messages: ChatMessage[] = [
+        { role: 'system', content: SYSTEM_PROMPT },
+        ...conv.messages,
+      ];
+
+      // Stream the LLM response
+      const stream = this.llm.chatStream({ messages, tools: toolDefs });
+      let assistantMsg: ChatMessage = { role: 'assistant', content: '' };
+
+      while (true) {
+        const { value: delta, done } = await stream.next();
+        if (done) {
+          assistantMsg = delta; // final assembled message
+          break;
+        }
+        if (delta?.content) {
+          onEvent('assistant_delta', { content: delta.content });
+        }
+      }
+
+      this.conversations.append(conversationId, assistantMsg);
+      audit.record({
+        userId, conversationId, event: 'llm_response',
+        data: { content: assistantMsg.content, tool_calls: assistantMsg.tool_calls },
+      });
+      onEvent('assistant_done', { message: assistantMsg });
+
+      const toolCalls = assistantMsg.tool_calls || [];
+      if (toolCalls.length === 0) {
+        // No tools — we're done
+        return;
+      }
+
+      // Process each tool call
+      let needsApproval = false;
+      for (const call of toolCalls) {
+        const tool = findTool(call.function.name);
+        if (!tool) {
+          const errMsg: ChatMessage = {
+            role: 'tool',
+            tool_call_id: call.id,
+            content: safeStringify({ error: `Unknown tool: ${call.function.name}` }),
+          };
+          this.conversations.append(conversationId, errMsg);
+          onEvent('tool_result', { id: call.id, content: errMsg.content });
+          continue;
+        }
+
+        let args: Record<string, unknown>;
+        try {
+          args = JSON.parse(call.function.arguments || '{}');
+        } catch {
+          args = {};
+        }
+
+        onEvent('tool_call', { id: call.id, name: tool.name, kind: tool.kind, args });
+        audit.record({
+          userId, conversationId, event: 'tool_call',
+          data: { tool: tool.name, kind: tool.kind, args, call_id: call.id },
+        });
+
+        if (tool.kind === 'write' && config.requireApproval) {
+          const approval = this.approvals.create({
+            conversationId, userId,
+            toolCallId: call.id,
+            toolName: tool.name,
+            args,
+          });
+          audit.record({
+            userId, conversationId, event: 'approval_requested',
+            data: { approvalId: approval.id, tool: tool.name, args },
+          });
+          onEvent('approval_needed', { approval });
+
+          const pendingMsg: ChatMessage = {
+            role: 'tool',
+            tool_call_id: call.id,
+            content: safeStringify({
+              status: 'pending_approval',
+              approval_id: approval.id,
+              message: 'Waiting for admin approval in the UI.',
+            }),
+          };
+          this.conversations.append(conversationId, pendingMsg);
+          needsApproval = true;
+          continue;
+        }
+
+        // Execute read tool
+        try {
+          const result = await tool.execute(args, { userToken });
+          const resultMsg: ChatMessage = {
+            role: 'tool',
+            tool_call_id: call.id,
+            content: safeStringify(result).slice(0, MAX_TOOL_RESULT_LEN),
+          };
+          this.conversations.append(conversationId, resultMsg);
+          onEvent('tool_result', { id: call.id, content: resultMsg.content });
+          audit.record({
+            userId, conversationId, event: 'tool_executed',
+            data: { tool: tool.name, kind: tool.kind, success: true },
+          });
+        } catch (err) {
+          const errText = err instanceof Error ? err.message : String(err);
+          const errMsg: ChatMessage = {
+            role: 'tool',
+            tool_call_id: call.id,
+            content: safeStringify({ error: errText }),
+          };
+          this.conversations.append(conversationId, errMsg);
+          onEvent('tool_result', { id: call.id, content: errMsg.content, error: true });
+          audit.record({
+            userId, conversationId, event: 'tool_executed',
+            data: { tool: tool.name, success: false, error: errText },
+          });
+        }
+      }
+
+      if (needsApproval) {
+        return; // Halt loop — wait for admin
+      }
+      // Otherwise continue loop with tool results
+    }
+
+    logger.warn('Streaming agent hit max iterations', { conversationId });
+  }
+
+  /**
    * Resume a conversation after an approval is decided.
    * If approved, executes the tool and continues the loop.
    */

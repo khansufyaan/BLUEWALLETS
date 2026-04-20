@@ -99,7 +99,10 @@ services:
     depends_on:
       ollama:
         condition: service_healthy
+    volumes:
+      - agent_data:/data
     environment:
+      CONVERSATION_DATA_DIR: /data/conversations
       AGENT_PORT: 3500
       LLM_URL: http://ollama:11434/v1
       LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b-instruct}
@@ -136,6 +139,8 @@ services:
 
 volumes:
   ollama_models:
+    driver: local
+  agent_data:
     driver: local
 
 networks:

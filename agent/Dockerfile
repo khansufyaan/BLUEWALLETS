@@ -25,6 +25,9 @@ COPY --from=builder --chown=blue:blue /app/node_modules ./node_modules
 COPY --from=builder --chown=blue:blue /app/dist ./dist
 COPY --from=builder --chown=blue:blue /app/package.json ./
 
+# Pre-create data dir with correct ownership for volume mounts
+RUN mkdir -p /data/conversations && chown -R blue:blue /data
+
 USER blue
 
 EXPOSE 3500

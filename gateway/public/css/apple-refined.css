@@ -982,6 +982,19 @@ tr:hover td {
   overflow: auto;
 }
 
+/* Streaming cursor — blinks while tokens arrive */
+.agent-streaming-cursor {
+  display: inline-block;
+  color: var(--violet-400);
+  font-weight: 700;
+  animation: cursor-blink 1s step-end infinite;
+  margin-left: 2px;
+  font-size: 0.9em;
+}
+@keyframes cursor-blink {
+  50% { opacity: 0; }
+}
+
 /* ── Thinking indicator — refined ── */
 .agent-thinking .agent-msg-body {
   color: var(--text-tertiary);

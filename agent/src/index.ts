@@ -149,7 +149,50 @@ async function main() {
     res.json({ ok: true });
   });
 
-  // Chat
+  // Streaming chat (SSE) — emits tokens as they arrive from the LLM
+  const chatStreamSchema = z.object({ message: z.string().min(1).max(10000) });
+  router.post('/conversations/:id/chat/stream', async (req, res) => {
+    const parsed = chatStreamSchema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: 'Invalid body' });
+
+    const conv = conversations.get(req.params.id);
+    if (!conv) return res.status(404).json({ error: 'Not found' });
+    const userId = (req as any).userId as string;
+    if (conv.userId !== userId) return res.status(403).json({ error: 'Forbidden' });
+
+    // Set up SSE
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache, no-transform');
+    res.setHeader('Connection', 'keep-alive');
+    res.setHeader('X-Accel-Buffering', 'no'); // disable nginx buffering
+    // Flush headers immediately
+    (res as any).flushHeaders?.();
+
+    const send = (event: string, data: unknown) => {
+      res.write(`event: ${event}\n`);
+      res.write(`data: ${JSON.stringify(data)}\n\n`);
+    };
+
+    try {
+      const userToken = (req as any).userToken as string | undefined;
+      await agent.chatStreaming({
+        conversationId: req.params.id,
+        userId,
+        userMessage: parsed.data.message,
+        userToken,
+        onEvent: send,
+      });
+      send('done', {});
+      res.end();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      logger.error('Stream chat failed', { error: msg });
+      send('error', { error: msg });
+      res.end();
+    }
+  });
+
+  // Non-streaming chat (kept for back-compat)
   const chatSchema = z.object({ message: z.string().min(1).max(10000) });
   router.post('/conversations/:id/chat', async (req, res) => {
     const parsed = chatSchema.safeParse(req.body);

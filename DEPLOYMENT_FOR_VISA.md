@@ -387,6 +387,43 @@ docker compose exec blue-agent curl http://ollama:11434/v1/models
 
 First-time boot takes 10 min to pull the model.
 
+### AI Agent is very slow (>60s per response)
+
+Likely cause: running Ollama in Docker on Mac/Windows without GPU. Docker
+on those platforms runs inside a VM that can't access Metal/CUDA.
+
+**On Mac**: run Ollama natively outside Docker to use Metal GPU:
+```bash
+# Install and run Ollama natively
+brew install ollama
+ollama serve &
+ollama pull qwen2.5:3b-instruct
+printf 'FROM qwen2.5:3b-instruct\nPARAMETER num_ctx 8192\n' | ollama create blue-qwen-fast -f -
+
+# Point the agent container at host Ollama
+# Edit docker-compose.agent.yml — remove the `ollama` service and change
+# LLM_URL in blue-agent to http://host.docker.internal:11434/v1
+```
+
+**On Linux with GPU**: use `docker-compose.agent.gpu.yml`. Ollama in Docker
+*can* access NVIDIA GPUs via nvidia-container-toolkit on Linux.
+
+**On Linux CPU-only**: expect 20-60s response times for the 7B model with
+18 tool definitions. Consider switching to a smaller model (3B or 1.5B)
+or upgrading to a GPU host.
+
+### "input truncated" in Ollama logs
+
+The default context window is 2048 tokens, too small for our system prompt
++ tool definitions. Create a custom model with larger context:
+```bash
+ollama create blue-qwen-fast -f - <<EOF
+FROM qwen2.5:7b-instruct
+PARAMETER num_ctx 8192
+EOF
+```
+Then set `LLM_MODEL=blue-qwen-fast:latest`.
+
 ---
 
 ## Support

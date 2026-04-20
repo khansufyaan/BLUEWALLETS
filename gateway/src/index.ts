@@ -132,6 +132,31 @@ async function main() {
     res.json({ service: 'blue-gateway-ops', status: signerUp ? 'healthy' : 'degraded' });
   });
 
+  // ── Blue Agent reverse proxy ───────────────────────────────────────────────
+  // Forwards browser /agent-api/* and /health (under /agent-api) to the agent service.
+  const AGENT_URL = process.env.AGENT_URL || 'http://blue-agent:3500';
+  opsApp.use('/agent-api', async (req, res) => {
+    try {
+      const url = `${AGENT_URL}${req.originalUrl.replace(/^\/agent-api/, '')}`;
+      const headers: Record<string, string> = {};
+      for (const [k, v] of Object.entries(req.headers)) {
+        if (typeof v === 'string') headers[k] = v;
+      }
+      delete headers.host;
+      const body = ['GET', 'HEAD'].includes(req.method) ? undefined : JSON.stringify(req.body);
+      if (body) headers['content-type'] = 'application/json';
+
+      const response = await fetch(url, { method: req.method, headers, body });
+      const text = await response.text();
+      res.status(response.status);
+      response.headers.forEach((v, k) => { if (!/^(transfer-encoding|content-length|connection)$/i.test(k)) res.setHeader(k, v); });
+      res.send(text);
+    } catch (err) {
+      logger.warn('Agent proxy error', { error: err instanceof Error ? err.message : 'unknown', url: req.originalUrl });
+      res.status(502).json({ error: 'Agent service unreachable' });
+    }
+  });
+
   // Serve ops dashboard static files
   const publicDir = path.join(__dirname, '../public');
   opsApp.use(express.static(publicDir));

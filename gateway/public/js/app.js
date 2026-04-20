@@ -32,6 +32,7 @@ import { renderKeyCeremony, initKeyCeremony } from './pages/key-ceremony.js';
 import { renderHsmHealth, initHsmHealth, destroyHsmHealth } from './pages/hsm-health.js';
 import { renderMultisig, initMultisig } from './pages/multisig.js';
 import { renderAutomations, initAutomations } from './pages/automations.js';
+import { renderAgent, initAgent } from './pages/agent.js';
 
 // Page imports — management (proxied from Driver)
 import { renderDashboard } from './pages/dashboard.js';
@@ -76,6 +77,7 @@ const TITLES = {
   'hsm-health':    'HSM Health',
   'multisig':      'Approvals',
   'automations':   'Automations',
+  'agent':         'AI Agent',
 };
 
 let _currentUser = null;
@@ -266,6 +268,9 @@ async function route() {
     } else if (page === 'automations') {
       pageContent.innerHTML = await renderAutomations();
       initAutomations();
+    } else if (page === 'agent') {
+      pageContent.innerHTML = await renderAgent();
+      initAgent();
     } else {
       pageContent.innerHTML = '<div class="empty-state"><h3>Page not found</h3></div>';
     }

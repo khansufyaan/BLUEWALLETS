@@ -1,7 +1,7 @@
 import { api } from '../api.js';
 
 export async function renderCreateWallet() {
-  const vaults = await api.getVaults();
+  const vaults = await api.getVaults().catch(() => []);
   if (vaults.length === 0) {
     return `
       <div class="card" style="max-width:500px">

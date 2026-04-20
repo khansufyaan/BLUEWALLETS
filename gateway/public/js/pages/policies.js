@@ -12,7 +12,8 @@ const RULE_TYPES = [
 
 export async function renderPolicies() {
   try {
-    const policies = await api.getPolicies();
+    // Graceful fallback: show empty list if Driver unavailable (dev mode)
+    const policies = await api.getPolicies().catch(() => []);
 
     const policyCards = policies.map(p => `
       <div class="policy-card">

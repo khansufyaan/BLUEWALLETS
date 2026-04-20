@@ -1,9 +1,9 @@
 import { api } from '../api.js';
 
 export async function renderBalances() {
-  const { wallets } = await api.getWallets();
+  const wallets = await api.getWallets().catch(() => []);
 
-  if (wallets.length === 0) {
+  if (!wallets || wallets.length === 0) {
     return `<div class="card"><div class="empty-state"><h3>No wallets</h3><p>Create wallets on the signer dashboard first.</p></div></div>`;
   }
 

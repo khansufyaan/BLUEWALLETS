@@ -91,8 +91,8 @@ export class LlmClient {
     }
   }
 
-  /** Check if the LLM server is reachable. */
-  async health(): Promise<{ ok: boolean; model?: string; error?: string }> {
+  /** Check if the LLM server is reachable AND the configured model is available. */
+  async health(): Promise<{ ok: boolean; model?: string; error?: string; availableModels?: string[] }> {
     try {
       const res = await fetch(`${config.llmUrl}/models`, {
         headers: { 'Authorization': `Bearer ${config.llmApiKey}` },
@@ -100,7 +100,19 @@ export class LlmClient {
       });
       if (!res.ok) return { ok: false, error: `HTTP ${res.status}` };
       const data = await res.json() as { data?: Array<{ id: string }> };
-      return { ok: true, model: data.data?.[0]?.id || config.llmModel };
+      const available = (data.data || []).map(m => m.id);
+      // Check the configured model is actually available
+      const configured = config.llmModel;
+      const hasConfigured = available.some(m => m === configured || m.startsWith(configured.split(':')[0] + ':'));
+      if (!hasConfigured) {
+        return {
+          ok: false,
+          error: `Configured model "${configured}" not found. Available: ${available.join(', ') || 'none'}`,
+          model: configured,
+          availableModels: available,
+        };
+      }
+      return { ok: true, model: configured, availableModels: available };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : 'unknown' };
     }

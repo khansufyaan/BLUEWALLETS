@@ -43,11 +43,11 @@ function summarizeAccess(perms) {
 export async function renderRoles() {
   try {
     const [roles, permData] = await Promise.all([
-      api.getRoles(),
-      api.getPermissions(),
+      api.getRoles().catch(() => []),
+      api.getPermissions().catch(() => ({ groups: [] })),
     ]);
 
-    const groups = permData.groups;
+    const groups = permData?.groups || [];
 
     const roleCards = roles.map(r => {
       const permCount = r.permissions.length;

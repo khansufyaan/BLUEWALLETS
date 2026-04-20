@@ -33,11 +33,11 @@ function roleHasPerm(roles, perm) {
 export async function renderPermissions() {
   try {
     const [permData, roles] = await Promise.all([
-      api.getPermissions(),
-      api.getRoles(),
+      api.getPermissions().catch(() => ({ groups: [] })),
+      api.getRoles().catch(() => []),
     ]);
 
-    const groups = permData.groups;
+    const groups = permData?.groups || [];
     const totalPerms = Object.values(groups).reduce((sum, perms) => sum + perms.length, 0);
 
     // Role column headers

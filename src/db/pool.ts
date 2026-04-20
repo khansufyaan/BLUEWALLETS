@@ -24,9 +24,10 @@ export async function initDatabase(): Promise<Pool | null> {
 
   pool = new Pool({ connectionString: url });
 
-  // Test connection
+  // Test connection — always release the client, even if migration throws
+  let client;
   try {
-    const client = await pool.connect();
+    client = await pool.connect();
     logger.info('PostgreSQL connected', { database: url.split('/').pop()?.split('?')[0] });
 
     // Run migrations — try dist first, then src (for dev)
@@ -37,14 +38,21 @@ export async function initDatabase(): Promise<Pool | null> {
     await client.query(schema);
     logger.info('Database schema applied');
 
-    client.release();
     return pool;
   } catch (error) {
     logger.error('PostgreSQL connection failed', {
-      error: error instanceof Error ? error.message : error,
+      error: error instanceof Error ? { message: error.message, stack: error.stack } : error,
     });
+    // Clean up the pool so we don't leak it
+    try { await pool.end(); } catch { /* ignore */ }
     pool = null;
     return null;
+  } finally {
+    // CRITICAL: release the client even if migration fails — otherwise
+    // this connection stays checked out forever and eventually exhausts the pool.
+    if (client) {
+      try { client.release(); } catch { /* ignore */ }
+    }
   }
 }
 

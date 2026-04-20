@@ -7,9 +7,11 @@ export async function renderTransactions() {
   ]);
   const transactions = txResult.transactions || [];
 
-  const walletOptions = wallets.map(w =>
-    `<option value="${w.id}" data-chain="${w.chain}" data-address="${w.address}" data-name="${w.name}">${w.name} (${w.address.slice(0,6)}...${w.address.slice(-4)}) — ${w.chain}</option>`
-  ).join('');
+  const walletOptions = wallets.map(w => {
+    const addr = w.address || '';
+    const addrShort = addr.length > 10 ? `${addr.slice(0,6)}...${addr.slice(-4)}` : (addr || 'no-address');
+    return `<option value="${w.id}" data-chain="${w.chain || ''}" data-address="${addr}" data-name="${w.name || ''}">${w.name || w.id} (${addrShort}) — ${w.chain || 'unknown'}</option>`;
+  }).join('');
 
   const rows = transactions.map(tx => {
     const amountWei = BigInt(tx.amount || '0');

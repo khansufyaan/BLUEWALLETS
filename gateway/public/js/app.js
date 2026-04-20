@@ -166,6 +166,15 @@ async function route() {
   const isAuth = await checkAuth();
   if (!isAuth) { showLogin(); return; }
 
+  // Ensure app shell is visible and login is hidden
+  const shell = document.getElementById('app-shell');
+  const loginContainer = document.getElementById('login-container');
+  if (shell?.classList.contains('hidden')) {
+    shell.classList.remove('hidden');
+    if (loginContainer) { loginContainer.classList.add('hidden'); loginContainer.innerHTML = ''; }
+    updateUserMenu();
+  }
+
   const hash = (window.location.hash || '#/').replace('#/', '');
   const parts = hash.split('/');
   const page = parts[0] || '';

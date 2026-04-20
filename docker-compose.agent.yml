@@ -7,12 +7,11 @@
 #   cp .env.agent.production .env.agent
 #   docker-compose -f docker-compose.yml -f docker-compose.agent.yml -f docker-compose.agent.gpu.yml up -d
 
-version: '3.8'
-
 services:
   # Ollama — on-prem LLM server (OpenAI-compatible API)
+  # Pinned to a specific version for reproducibility
   ollama:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.3.14
     container_name: blue-ollama
     volumes:
       - ollama_models:/root/.ollama
@@ -33,10 +32,18 @@ services:
       timeout: 10s
       retries: 3
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: ${OLLAMA_MEM_LIMIT:-16G}
+          cpus: '${OLLAMA_CPU_LIMIT:-4}'
+        reservations:
+          memory: 4G
 
   # Pull LLM + embeddings models on first boot (one-shot)
   ollama-init:
-    image: ollama/ollama:latest
+    image: ollama/ollama:0.3.14
+    container_name: blue-ollama-init
     depends_on:
       ollama:
         condition: service_healthy
@@ -57,8 +64,9 @@ services:
 
   # Whisper.cpp — free, on-prem speech-to-text server
   # Uses ggml base.en model (~150MB). Runs on CPU, near real-time.
+  # Pinned to digest-locked image.
   whisper:
-    image: onerahmet/openai-whisper-asr-webservice:latest
+    image: onerahmet/openai-whisper-asr-webservice:v1.4.1
     container_name: blue-whisper
     environment:
       ASR_MODEL: base.en
@@ -73,12 +81,20 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2'
+        reservations:
+          memory: 512M
 
   # Blue Agent — tool-calling orchestrator
   blue-agent:
     build:
       context: ./agent
       dockerfile: Dockerfile
+    image: ghcr.io/khansufyaan/blue-agent:latest
     container_name: blue-agent
     depends_on:
       ollama:
@@ -89,7 +105,7 @@ services:
       LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b-instruct}
       LLM_API_KEY: ollama
       LLM_MAX_TOKENS: ${LLM_MAX_TOKENS:-2048}
-      GATEWAY_URL: http://blue-gateway:3400
+      GATEWAY_URL: http://blue-console:3400
       DRIVER_URL: http://blue-driver:3100
       INTERNAL_AUTH_KEY: ${INTERNAL_AUTH_KEY:-}
       AGENT_AUTH_KEY: ${AGENT_AUTH_KEY:-}
@@ -110,9 +126,17 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '1'
+        reservations:
+          memory: 128M
 
 volumes:
   ollama_models:
+    driver: local
 
 networks:
   blue-internal:

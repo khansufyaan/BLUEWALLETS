@@ -108,7 +108,8 @@ export function createOpsGasRoutes(
 
   /** GET /ops/gas-station/history — funding transaction history */
   router.get('/history', (req: Request, res: Response) => {
-    const limit = parseInt(req.query.limit as string) || 50;
+    const raw = parseInt(String(req.query.limit || ''), 10);
+    const limit = Number.isFinite(raw) ? Math.max(1, Math.min(raw, 1000)) : 50;
     res.json({ fundings: gasStore.getFundings(limit) });
   });
 

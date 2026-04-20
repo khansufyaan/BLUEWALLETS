@@ -1,25 +1,37 @@
-FROM node:20-alpine
+# ============================================================
+# Blue Gateway — Bank-facing API + Ops Console (DMZ tier)
+# ============================================================
 
-# Install openssl for auto-generating self-signed TLS cert
-RUN apk add --no-cache openssl
+# ── Build stage ──
+FROM node:20-alpine AS builder
 
 WORKDIR /app
-
 COPY package.json package-lock.json* ./
-RUN npm install
-
+RUN npm ci
 COPY tsconfig.json ./
 COPY src/ ./src/
-COPY public/ ./public/
-
 RUN npx tsc
+RUN npm prune --omit=dev
+
+# ── Runtime stage ──
+FROM node:20-alpine
+
+# openssl for self-signed TLS, tini for proper signal handling, curl for healthchecks
+RUN apk add --no-cache openssl tini curl
+
+# Non-root user
+RUN addgroup -S blue && adduser -S blue -G blue -u 1001
+
+WORKDIR /app
+COPY --from=builder --chown=blue:blue /app/node_modules ./node_modules
+COPY --from=builder --chown=blue:blue /app/dist ./dist
+COPY --from=builder --chown=blue:blue /app/package.json ./
+COPY --chown=blue:blue public/ ./public/
 
 # Entrypoint: auto-generate self-signed TLS cert if not present, then start server
-COPY <<'ENTRYPOINT' /app/entrypoint.sh
+COPY --chown=blue:blue <<'ENTRY' /app/entrypoint.sh
 #!/bin/sh
 set -e
-
-# Auto-generate self-signed TLS cert for Ops Dashboard if not already present
 TLS_DIR="/tmp/tls"
 TLS_CERT="${TLS_DIR}/console-tls-cert.pem"
 TLS_KEY="${TLS_DIR}/console-tls-key.pem"
@@ -32,18 +44,21 @@ if [ ! -f "$TLS_CERT" ] || [ ! -f "$TLS_KEY" ]; then
     -days 3650 -subj "/CN=blue-console" \
     -addext "subjectAltName=DNS:localhost,DNS:blue-console,IP:127.0.0.1" \
     2>/dev/null
-  echo "TLS certificate generated at $TLS_CERT"
 fi
 
 export OPS_TLS_CERT="$TLS_CERT"
 export OPS_TLS_KEY="$TLS_KEY"
 
 exec node dist/index.js
-ENTRYPOINT
+ENTRY
 RUN chmod +x /app/entrypoint.sh
+
+USER blue
 
 EXPOSE 3100 3400
 
-HEALTHCHECK --interval=10s --timeout=3s CMD wget -qO- http://localhost:3100/health || exit 1
+HEALTHCHECK --interval=10s --timeout=3s --retries=5 --start-period=30s \
+  CMD curl -fs http://localhost:3100/health || exit 1
 
+ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["/app/entrypoint.sh"]

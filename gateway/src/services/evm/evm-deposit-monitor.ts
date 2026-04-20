@@ -218,31 +218,53 @@ export class EvmDepositMonitor {
           });
         }
       } catch (error) {
+        // Track retry count to prevent infinite retry loops
+        const retryCount = (deposit as any)._retryCount || 0;
         logger.error('Failed to process confirmed deposit', {
-          error,
+          error: error instanceof Error ? error.message : error,
           txHash: deposit.txHash,
+          retryCount,
         });
-        // Re-add to pending so we retry
-        this.pendingDeposits.push(deposit);
+        // Re-add to pending with bounded retries — max 5 attempts
+        if (retryCount < 5) {
+          (deposit as any)._retryCount = retryCount + 1;
+          this.pendingDeposits.push(deposit);
+        } else {
+          logger.error('Deposit processing abandoned after 5 retries — moving to dead-letter', {
+            txHash: deposit.txHash,
+            walletId: deposit.walletId,
+          });
+          // In production: push to a dead-letter store for manual review
+        }
       }
     }
   }
 
   private async fireWebhook(deposit: PendingDeposit, newBalance: string): Promise<void> {
-    await fetch(config.webhookUrl, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        event:     'deposit.confirmed',
-        chain:     deposit.chain,
-        txHash:    deposit.txHash,
-        walletId:  deposit.walletId,
-        address:   deposit.to,
-        from:      deposit.from,
-        value:     deposit.value,
-        balance:   newBalance,
-        timestamp: new Date().toISOString(),
-      }),
-    });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10_000);
+    try {
+      const response = await fetch(config.webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          event:     'deposit.confirmed',
+          chain:     deposit.chain,
+          txHash:    deposit.txHash,
+          walletId:  deposit.walletId,
+          address:   deposit.to,
+          from:      deposit.from,
+          value:     deposit.value,
+          balance:   newBalance,
+          timestamp: new Date().toISOString(),
+        }),
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        throw new Error(`Webhook returned ${response.status}: ${response.statusText}`);
+      }
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 }

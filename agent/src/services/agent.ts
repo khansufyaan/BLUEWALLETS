@@ -56,6 +56,29 @@ Rules:
 You are running fully on-prem with no internet access.`;
 
 const MAX_ITERATIONS = 8;
+const MAX_TOOL_RESULT_LEN = 8000;
+
+/**
+ * Safe JSON stringify — handles BigInt, circular refs, undefined values
+ * that would otherwise crash the agent when a tool returns unexpected data.
+ */
+function safeStringify(value: unknown): string {
+  try {
+    const seen = new WeakSet();
+    return JSON.stringify(value, (_k, v) => {
+      if (typeof v === 'bigint') return v.toString();
+      if (typeof v === 'function') return '[Function]';
+      if (v instanceof Error) return { name: v.name, message: v.message };
+      if (typeof v === 'object' && v !== null) {
+        if (seen.has(v)) return '[Circular]';
+        seen.add(v);
+      }
+      return v;
+    });
+  } catch (err) {
+    return JSON.stringify({ _error: 'Result not serializable', _reason: err instanceof Error ? err.message : 'unknown' });
+  }
+}
 
 export class Agent {
   constructor(
@@ -183,7 +206,7 @@ export class Agent {
           const resultMsg: ChatMessage = {
             role: 'tool',
             tool_call_id: call.id,
-            content: JSON.stringify(result).slice(0, 8000), // Cap size
+            content: safeStringify(result).slice(0, MAX_TOOL_RESULT_LEN),
           };
           this.conversations.append(conversationId, resultMsg);
           newMessages.push(resultMsg);
@@ -263,7 +286,7 @@ export class Agent {
         const resultMsg: ChatMessage = {
           role: 'tool',
           tool_call_id: approval.toolCallId,
-          content: JSON.stringify(result).slice(0, 8000),
+          content: safeStringify(result).slice(0, MAX_TOOL_RESULT_LEN),
         };
         this.conversations.append(approval.conversationId, resultMsg);
         newMessages.push(resultMsg);

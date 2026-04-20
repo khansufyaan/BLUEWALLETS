@@ -148,13 +148,15 @@ export function createOpsComplianceRoutes(signerClient: SignerClient): Router {
 
   /** GET /ops/compliance/screenings — screening decision history */
   router.get('/screenings', (req: Request, res: Response) => {
-    const limit = parseInt(req.query.limit as string) || 100;
+    const raw = parseInt(String(req.query.limit || ''), 10);
+    const limit = Number.isFinite(raw) ? Math.max(1, Math.min(raw, 1000)) : 100;
     res.json({ decisions: complianceStore.getDecisions(limit) });
   });
 
   /** GET /ops/compliance/blocked — blocked transfers only */
   router.get('/blocked', (req: Request, res: Response) => {
-    const limit = parseInt(req.query.limit as string) || 100;
+    const raw = parseInt(String(req.query.limit || ''), 10);
+    const limit = Number.isFinite(raw) ? Math.max(1, Math.min(raw, 1000)) : 100;
     res.json({ decisions: complianceStore.getBlockedDecisions(limit) });
   });
 

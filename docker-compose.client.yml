@@ -9,7 +9,7 @@
 #   5. Open Blue Console: http://localhost:3400  (Operations)
 #
 # Required .env file:
-#   POSTGRES_PASSWORD=<strong-password>
+#   POSTGRES_PASSWORD=<strong-password>    # 16+ chars, mixed case + symbols
 #   INTERNAL_AUTH_KEY=<random-64-char-string>
 #   ETH_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/<your-key>
 # ============================================================
@@ -17,11 +17,12 @@
 services:
   # ─── PostgreSQL (Secure Zone) ────────────────────────────────
   postgres:
-    image: postgres:16-alpine
+    image: postgres:16.4-alpine
+    container_name: blue-postgres
     environment:
       POSTGRES_DB: bluewallets
       POSTGRES_USER: blue
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
     volumes:
       - pgdata:/var/lib/postgresql/data
     networks:
@@ -32,10 +33,18 @@ services:
       timeout: 3s
       retries: 10
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2'
+        reservations:
+          memory: 512M
 
   # ─── Blue Driver (Secure Zone — No Internet) ────────────────
   blue-driver:
     image: ghcr.io/khansufyaan/blue-driver:latest
+    container_name: blue-driver
     ports:
       - "${DRIVER_PORT:-443}:3100"    # Driver dashboard (default 443 for enterprise)
       - "${INTERNAL_PORT:-3200}:3200" # Internal API (mTLS)
@@ -44,8 +53,9 @@ services:
       - INTERNAL_PORT=3200
       - NODE_ENV=production
       - MTLS_ENABLED=true
-      - INTERNAL_AUTH_KEY=${INTERNAL_AUTH_KEY}
+      - INTERNAL_AUTH_KEY=${INTERNAL_AUTH_KEY:?INTERNAL_AUTH_KEY is required}
       - DATABASE_URL=postgresql://blue:${POSTGRES_PASSWORD}@postgres:5432/bluewallets
+      - LOG_LEVEL=${LOG_LEVEL:-info}
     volumes:
       - ./certs:/app/certs:ro
     networks:
@@ -54,28 +64,40 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3100/health"]
+      test: ["CMD", "curl", "-fs", "-o", "/dev/null", "-w", "%{http_code}", "http://localhost:3100/health"]
       interval: 10s
       timeout: 5s
       retries: 10
       start_period: 60s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+          cpus: '2'
+        reservations:
+          memory: 512M
 
-  # ─── Blue Console (DMZ — Internet Access) ────────────────────
+  # ─── Blue Console / Gateway (DMZ — Internet Access) ────────────────
   blue-console:
     image: ghcr.io/khansufyaan/blue-console:latest
+    container_name: blue-console
     ports:
       - "3300:3100"          # Bank-facing API
       - "3400:3400"          # Ops dashboard
     environment:
       - PORT=3100
+      - OPS_PORT=3400
       - SIGNER_URL=https://blue-driver:3200
-      - INTERNAL_AUTH_KEY=${INTERNAL_AUTH_KEY}
+      - INTERNAL_AUTH_KEY=${INTERNAL_AUTH_KEY:?INTERNAL_AUTH_KEY is required}
       - CERTS_DIR=/app/certs
       - ETH_RPC_URL=${ETH_RPC_URL:-https://eth-sepolia.g.alchemy.com/v2/demo}
       - ETH_CHAIN_ID=${ETH_CHAIN_ID:-11155111}
       - DEPOSIT_POLL_MS=15000
       - WEBHOOK_URL=${WEBHOOK_URL:-}
+      - CORS_ORIGIN=${CORS_ORIGIN:-}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+      - AGENT_URL=${AGENT_URL:-http://blue-agent:3500}
     volumes:
       - ./certs:/app/certs:ro
     networks:
@@ -84,13 +106,29 @@ services:
     depends_on:
       blue-driver:
         condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:3100/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: '1'
+        reservations:
+          memory: 256M
 
 networks:
   internal:
     driver: bridge
+    # For tier-1 bank deployments, add: internal: true
+    # (prevents egress from secure zone — requires outbound proxy for RPC)
   internet:
     driver: bridge
 
 volumes:
   pgdata:
+    driver: local

@@ -46,10 +46,19 @@ export class ApprovalStore {
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
   }
 
+  /**
+   * Atomically transition the approval from 'pending' to 'approved' or 'rejected'.
+   * Throws if the approval doesn't exist or has already been decided.
+   * Safe against concurrent calls: the first one wins, the second throws.
+   */
   decide(id: string, decision: 'approved' | 'rejected', decidedBy: string): ApprovalRequest {
     const ap = this.store.get(id);
     if (!ap) throw new Error(`Approval not found: ${id}`);
-    if (ap.status !== 'pending') throw new Error(`Approval already ${ap.status}`);
+    // Atomic compare-and-swap: in JS single-threaded runtime, these 3 ops run
+    // atomically between I/O boundaries. No race possible within this function.
+    if (ap.status !== 'pending') {
+      throw new Error(`Approval already ${ap.status}${ap.decidedBy ? ` by ${ap.decidedBy}` : ''}`);
+    }
     ap.status = decision;
     ap.decidedAt = new Date();
     ap.decidedBy = decidedBy;

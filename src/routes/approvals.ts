@@ -27,7 +27,9 @@ export function createApprovalRoutes(
 
   /** GET /api/v1/approvals/history — full audit trail */
   router.get('/history', requireAuth(authService), (req: Request, res: Response) => {
-    const limit = parseInt(req.query.limit as string) || 50;
+    // Bounded limit to prevent DoS via huge pagination values
+    const raw = parseInt(String(req.query.limit || ''), 10);
+    const limit = Number.isFinite(raw) ? Math.max(1, Math.min(raw, 1000)) : 50;
     res.json({ actions: approvalService.getHistory(limit) });
   });
 

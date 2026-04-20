@@ -6,6 +6,20 @@ Blue Wallets provides a self-hosted, FIPS-compliant key management and wallet in
 
 ---
 
+## 🚀 Quick Start (3 commands)
+
+```bash
+git clone https://github.com/khansufyaan/BLUEWALLETS.git && cd BLUEWALLETS
+./setup.sh                                             # generates .env + mTLS certs
+docker compose -f docker-compose.client.yml up -d      # starts Driver + Console + Postgres
+```
+
+Then open **http://localhost:3400** for the Console, or **https://localhost:443** for the Driver.
+
+For Visa / production deployments, see **[DEPLOYMENT_FOR_VISA.md](./DEPLOYMENT_FOR_VISA.md)**.
+
+---
+
 ## Architecture Overview
 
 ```

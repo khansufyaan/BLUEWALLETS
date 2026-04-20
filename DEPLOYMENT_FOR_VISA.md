@@ -110,52 +110,30 @@ docker load -i blue-agent-v1.0.0.tar
 
 ---
 
-## Step 2 — Generate credentials
+## Step 2 — Run the setup script (one command)
 
-These MUST be set before starting any containers:
+This generates `.env` with strong random secrets AND mTLS certificates:
 
 ```bash
-cat > .env <<EOF
-# Strong passwords (use a password manager — 16+ chars mixed case + symbols)
-POSTGRES_PASSWORD=$(openssl rand -base64 24 | tr -d '=/+' | head -c 24)
-
-# Shared secret between Driver and Console (must be 64 hex chars)
-INTERNAL_AUTH_KEY=$(openssl rand -hex 32)
-
-# Blockchain RPC provider (get your own key)
-ETH_RPC_URL=https://eth-sepolia.g.alchemy.com/v2/YOUR_KEY_HERE
-ETH_CHAIN_ID=11155111
-
-# CORS — restrict to your Console hostname
-CORS_ORIGIN=https://console.yourbank.internal
-
-# Optional: production log level
-LOG_LEVEL=info
-EOF
-
-chmod 600 .env
+./setup.sh
 ```
+
+That's it for setup. The script:
+- Generates a 24-char Postgres password
+- Generates a 64-hex shared auth key between Driver and Console
+- Generates a root CA + leaf certs for mTLS (Driver ↔ Console)
+- Writes `.env` with mode 600 (owner-only read)
+
+**If you prefer manual setup:** copy `.env.example` to `.env` and fill in the `REPLACE_ME` values yourself. Then run `./certs/generate-certs.sh`.
+
+**For production:** after running `setup.sh`, edit `.env` to:
+- Replace `ETH_RPC_URL` with your Alchemy/Infura key (not the public demo)
+- Set `CORS_ORIGIN` to your Console's production URL
+- Replace the generated certs with your internal PKI-issued certs
 
 ---
 
-## Step 3 — Generate mTLS certificates
-
-The Driver and Console communicate over mTLS on port 3200. Generate a root CA and leaf certs:
-
-```bash
-./certs/generate-certs.sh
-```
-
-This creates:
-- `certs/ca.pem` (root CA)
-- `certs/driver-cert.pem` + `certs/driver-key.pem`
-- `certs/console-cert.pem` + `certs/console-key.pem`
-
-**For production:** use your internal PKI instead. Place your certificates in the `certs/` directory with the same filenames.
-
----
-
-## Step 4 — Start the stack
+## Step 3 — Start the stack
 
 ### Minimal stack (Driver + Console + Postgres)
 
@@ -200,7 +178,7 @@ This enables Llama 3.1 70B (needs 48 GB+ VRAM).
 
 ---
 
-## Step 5 — Verify health
+## Step 4 — Verify health
 
 Wait ~60 seconds for all containers to pass their healthchecks, then:
 
@@ -231,7 +209,7 @@ Expected Driver health output:
 
 ---
 
-## Step 6 — First-time setup
+## Step 5 — First-time setup
 
 1. **Open the Driver**: `https://localhost:443`
    - Accept the self-signed cert warning (or use your real cert)
@@ -357,6 +335,19 @@ docker compose up -d
 ---
 
 ## Troubleshooting
+
+### `INTERNAL_AUTH_KEY is required` on `docker compose up`
+
+The compose file enforces that secrets are set. You forgot to create `.env`.
+Run:
+```bash
+./setup.sh
+```
+Then try `docker compose up -d` again.
+
+### `POSTGRES_PASSWORD is required`
+
+Same cause as above — missing `.env`. Run `./setup.sh`.
 
 ### "HSM signing failed" in logs
 

@@ -364,11 +364,14 @@ export function initAgent() {
       const content = msg.content ? renderMarkdown(msg.content) : '';
       const toolCalls = (msg.tool_calls || []).map(tc => `
         <div class="agent-tool-call">
-          <div class="agent-tool-call-head">&#9881; Calling <code>${esc(tc.function.name)}</code></div>
+          <div class="agent-tool-call-head">Calling <code>${esc(tc.function.name)}</code></div>
           <pre>${esc(tc.function.arguments)}</pre>
         </div>
       `).join('');
-      div.innerHTML = `<div class="agent-msg-body">${content}${toolCalls}</div>`;
+      // Skip empty assistant messages (only tool calls, no text) — render just the tool call card
+      if (!content && !toolCalls) return;
+      const bodyContent = content || '<em style="opacity:0.6">Planning next action...</em>';
+      div.innerHTML = `<div class="agent-msg-body">${bodyContent}${toolCalls}</div>`;
       // Speak if TTS enabled
       if (msg.content && window._speak) window._speak(msg.content);
     } else if (msg.role === 'tool') {

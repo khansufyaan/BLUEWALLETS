@@ -120,10 +120,19 @@ export async function renderAgent() {
           <!-- Input -->
           <div class="agent-input-wrap">
             <div class="agent-input-row">
-              <textarea id="agent-input" class="agent-input" rows="1" placeholder="Ask the agent... (Cmd+Enter to send)" ${llmOk ? '' : 'disabled'}></textarea>
+              <textarea id="agent-input" class="agent-input" rows="1" placeholder="Ask the agent... (Cmd+Enter to send, hold mic for voice)" ${llmOk ? '' : 'disabled'}></textarea>
+              <button class="agent-mic-btn" id="agent-mic" title="Hold to record voice input" ${llmOk ? '' : 'disabled'}>
+                <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5">
+                  <rect x="6" y="2" width="6" height="10" rx="3"/>
+                  <path d="M3 9a6 6 0 0012 0M9 15v2M6 17h6"/>
+                </svg>
+              </button>
               <button class="btn btn-primary" id="agent-send" ${llmOk ? '' : 'disabled'}>Send</button>
             </div>
             <div class="agent-input-hint">
+              <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;margin-right:12px">
+                <input type="checkbox" id="agent-tts-toggle" style="margin:0"> Speak responses
+              </label>
               ${llmOk
                 ? `<span>All queries run on-prem · No data leaves your infrastructure</span>`
                 : `<span class="text-red">Start the agent stack: <code>docker-compose -f docker-compose.agent.yml up -d</code></span>`}
@@ -360,6 +369,8 @@ export function initAgent() {
         </div>
       `).join('');
       div.innerHTML = `<div class="agent-msg-body">${content}${toolCalls}</div>`;
+      // Speak if TTS enabled
+      if (msg.content && window._speak) window._speak(msg.content);
     } else if (msg.role === 'tool') {
       div.className = 'agent-msg agent-msg-tool';
       let parsed;
@@ -382,6 +393,88 @@ export function initAgent() {
     messagesEl.appendChild(div);
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
+
+  // ── Voice (STT + TTS) ────────────────────────────────────────────────
+  let _mediaRecorder = null;
+  let _audioChunks = [];
+  let _isRecording = false;
+
+  const micBtn = document.getElementById('agent-mic');
+  const ttsToggle = document.getElementById('agent-tts-toggle');
+
+  async function startRecording() {
+    if (_isRecording) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      _audioChunks = [];
+      _mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+      _mediaRecorder.ondataavailable = e => { if (e.data.size > 0) _audioChunks.push(e.data); };
+      _mediaRecorder.onstop = async () => {
+        const blob = new Blob(_audioChunks, { type: 'audio/webm' });
+        stream.getTracks().forEach(t => t.stop());
+        if (blob.size < 500) return; // Too short
+        micBtn.classList.add('agent-mic-processing');
+        try {
+          const res = await fetch(`${AGENT_BASE}/agent/voice/transcribe`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'audio/webm' },
+            body: blob,
+          });
+          if (!res.ok) throw new Error(await res.text());
+          const data = await res.json();
+          if (data.text) {
+            input.value = (input.value ? input.value + ' ' : '') + data.text;
+            input.focus();
+            input.style.height = 'auto';
+            input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+          }
+        } catch (err) {
+          console.warn('Voice transcription failed:', err);
+          alert('Voice transcription unavailable. Start the whisper container.');
+        } finally {
+          micBtn.classList.remove('agent-mic-processing');
+        }
+      };
+      _mediaRecorder.start();
+      _isRecording = true;
+      micBtn.classList.add('agent-mic-recording');
+    } catch (err) {
+      console.warn('Microphone access denied:', err);
+      alert('Microphone permission required for voice input.');
+    }
+  }
+
+  function stopRecording() {
+    if (_mediaRecorder && _isRecording) {
+      _mediaRecorder.stop();
+      _isRecording = false;
+      micBtn.classList.remove('agent-mic-recording');
+    }
+  }
+
+  // Press-and-hold behavior
+  micBtn?.addEventListener('mousedown', startRecording);
+  micBtn?.addEventListener('mouseup', stopRecording);
+  micBtn?.addEventListener('mouseleave', stopRecording);
+  micBtn?.addEventListener('touchstart', (e) => { e.preventDefault(); startRecording(); });
+  micBtn?.addEventListener('touchend', (e) => { e.preventDefault(); stopRecording(); });
+
+  // TTS — use free browser Web Speech API (works offline on most browsers)
+  function speak(text) {
+    if (!ttsToggle?.checked) return;
+    if (!('speechSynthesis' in window)) return;
+    const utter = new SpeechSynthesisUtterance(text.replace(/[*_`#]/g, '').slice(0, 500));
+    utter.rate = 1.05;
+    utter.pitch = 1.0;
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utter);
+  }
+  // Stop speaking when user starts typing
+  input?.addEventListener('input', () => { if (window.speechSynthesis?.speaking) window.speechSynthesis.cancel(); });
+
+  // Attach speak() to assistant messages
+  const origAppendMessage = appendMessage;
+  window._speak = speak;
 
   function renderMarkdown(text) {
     // Minimal safe markdown: code blocks, inline code, bold, italic, links, line breaks

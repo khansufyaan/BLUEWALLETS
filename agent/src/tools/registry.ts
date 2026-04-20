@@ -227,7 +227,7 @@ const CREATE_VAULT: ToolHandler = {
 
 // ── Registry ─────────────────────────────────────────────────────────────────
 
-export const ALL_TOOLS: ToolHandler[] = [
+export const BASE_TOOLS: ToolHandler[] = [
   LIST_WALLETS,
   GET_WALLET,
   LIST_VAULTS,
@@ -240,8 +240,18 @@ export const ALL_TOOLS: ToolHandler[] = [
   CREATE_VAULT,
 ];
 
+// Dynamic registry — other modules can register additional tools.
+let _extraTools: ToolHandler[] = [];
+
+export function registerTools(tools: ToolHandler[]): void {
+  _extraTools.push(...tools);
+}
+
+export const ALL_TOOLS: ToolHandler[] = BASE_TOOLS;
+
 export function getAvailableTools(): ToolHandler[] {
-  return config.allowWriteTools ? ALL_TOOLS : ALL_TOOLS.filter(t => t.kind === 'read');
+  const all = [...BASE_TOOLS, ..._extraTools];
+  return config.allowWriteTools ? all : all.filter(t => t.kind === 'read');
 }
 
 export function toOpenAIDefinitions(tools: ToolHandler[]): ToolDefinition[] {
@@ -256,5 +266,5 @@ export function toOpenAIDefinitions(tools: ToolHandler[]): ToolDefinition[] {
 }
 
 export function findTool(name: string): ToolHandler | undefined {
-  return ALL_TOOLS.find(t => t.name === name);
+  return [...BASE_TOOLS, ..._extraTools].find(t => t.name === name);
 }

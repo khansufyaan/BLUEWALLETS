@@ -1394,6 +1394,100 @@ tr:hover td { background: var(--bg-hover); }
   display: flex; gap: var(--sp-2); justify-content: flex-end;
 }
 
+/* Voice mic button */
+.agent-mic-btn {
+  width: 40px; height: 40px;
+  border-radius: 50%;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.15s;
+  flex-shrink: 0;
+  user-select: none;
+}
+.agent-mic-btn:hover { border-color: var(--border-hover); color: var(--text-primary); }
+.agent-mic-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.agent-mic-recording {
+  background: var(--red-bg) !important;
+  border-color: var(--red) !important;
+  color: var(--red) !important;
+  animation: mic-pulse 1s infinite;
+}
+.agent-mic-processing {
+  background: rgba(245,158,11,0.1);
+  border-color: var(--amber);
+  color: var(--amber);
+  animation: mic-spin 1s linear infinite;
+}
+@keyframes mic-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.5); }
+  50% { box-shadow: 0 0 0 8px rgba(239,68,68,0); }
+}
+@keyframes mic-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* Inline "Explain" button for transactions */
+.explain-tx-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 3px 8px;
+  font-size: 11px;
+  background: linear-gradient(135deg, rgba(124,58,237,0.15), rgba(37,99,235,0.15));
+  border: 1px solid rgba(124,58,237,0.2);
+  color: #A78BFA;
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  font-family: inherit;
+  transition: all 0.15s;
+}
+.explain-tx-btn:hover {
+  background: linear-gradient(135deg, rgba(124,58,237,0.25), rgba(37,99,235,0.25));
+  border-color: rgba(124,58,237,0.4);
+}
+
+/* Explain TX popup */
+.explain-popup-overlay {
+  position: fixed; inset: 0; z-index: 200;
+  background: rgba(0,0,0,0.6); backdrop-filter: blur(4px);
+  display: flex; align-items: center; justify-content: center;
+  padding: var(--sp-4);
+  animation: fadeIn 0.2s ease;
+}
+.explain-popup {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-xl);
+  padding: var(--sp-5);
+  max-width: 560px; width: 100%;
+  max-height: 80vh; overflow-y: auto;
+  box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+}
+.explain-popup-header {
+  display: flex; justify-content: space-between; align-items: center;
+  margin-bottom: var(--sp-4);
+}
+.explain-popup-title {
+  font-size: 15px; font-weight: 600;
+  display: flex; align-items: center; gap: var(--sp-2);
+}
+.explain-popup-icon {
+  font-size: 20px;
+  background: linear-gradient(135deg, var(--blue-500), var(--violet-600));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.explain-popup-body { font-size: 14px; line-height: 1.6; color: var(--text-primary); }
+.explain-popup-body p { margin-bottom: var(--sp-3); }
+.explain-popup-body code { background: var(--bg-input); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+.explain-popup-loading {
+  display: flex; align-items: center; gap: var(--sp-2);
+  color: var(--text-tertiary); font-size: 13px;
+  padding: var(--sp-6) 0;
+  justify-content: center;
+}
+
 /* Input */
 .agent-input-wrap {
   border-top: 1px solid var(--border);

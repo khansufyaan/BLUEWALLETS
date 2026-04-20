@@ -25,13 +25,43 @@ import { InMemoryConversationStore } from './stores/conversation-store';
 import { ApprovalStore } from './stores/approval-store';
 import { Agent } from './services/agent';
 import { audit } from './services/audit';
-import { getAvailableTools } from './tools/registry';
+import { getAvailableTools, registerTools } from './tools/registry';
+import { ADVANCED_TOOLS, createRagSearchTool } from './tools/advanced-tools';
+import { EmbeddingsClient } from './services/rag/embeddings';
+import { KnowledgeStore } from './services/rag/knowledge-store';
+import { KnowledgeIndexer } from './services/rag/indexer';
+import { WhisperClient } from './services/whisper';
 
 async function main() {
   const llm = new LlmClient();
   const conversations = new InMemoryConversationStore();
   const approvals = new ApprovalStore();
   const agent = new Agent(llm, conversations, approvals);
+
+  // ── RAG setup ────────────────────────────────────────────────────────────
+  const embeddings = new EmbeddingsClient();
+  const knowledge = new KnowledgeStore(embeddings);
+  const indexer = new KnowledgeIndexer(knowledge);
+
+  // Register advanced tools + RAG search tool
+  registerTools([...ADVANCED_TOOLS, createRagSearchTool(knowledge)]);
+
+  // Start indexer (non-blocking)
+  embeddings.health().then(h => {
+    if (h.ok) {
+      logger.info('Embeddings model reachable — starting knowledge indexer');
+      indexer.start();
+    } else {
+      logger.warn('Embeddings unavailable — RAG disabled. Pull nomic-embed-text to enable.', { error: h.error });
+    }
+  });
+
+  // ── Whisper (voice) ──────────────────────────────────────────────────────
+  const whisper = new WhisperClient();
+  whisper.health().then(h => {
+    if (h.ok) logger.info('Whisper STT reachable');
+    else logger.info('Whisper not configured — voice input disabled (optional)');
+  });
 
   // LLM reachability check (non-blocking)
   llm.health().then(h => {
@@ -194,6 +224,40 @@ async function main() {
   router.get('/audit', (req, res) => {
     const limit = Math.min(parseInt(String(req.query.limit || '100'), 10), 500);
     res.json({ entries: audit.list(limit) });
+  });
+
+  // ── Voice transcription (Whisper STT) ──────────────────────────────────
+  // Accepts multipart/form-data with an audio file or raw audio blob.
+  router.post('/voice/transcribe', express.raw({ type: '*/*', limit: '25mb' }), async (req, res) => {
+    try {
+      const health = await whisper.health();
+      if (!health.ok) {
+        return res.status(503).json({ error: 'Whisper service unavailable', detail: health.error });
+      }
+      const audioBuffer = req.body as Buffer;
+      if (!audioBuffer || !audioBuffer.length) {
+        return res.status(400).json({ error: 'No audio data' });
+      }
+      const result = await whisper.transcribe(audioBuffer, 'audio.webm');
+      res.json(result);
+    } catch (err) {
+      logger.error('Transcribe failed', { error: err instanceof Error ? err.message : err });
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown error' });
+    }
+  });
+
+  // ── Knowledge base (RAG) ───────────────────────────────────────────────
+  router.get('/knowledge/stats', (_req, res) => {
+    res.json(knowledge.stats());
+  });
+
+  router.post('/knowledge/reindex', async (_req, res) => {
+    try {
+      const result = await indexer.runOnce();
+      res.json({ ok: true, added: result.added, stats: knowledge.stats() });
+    } catch (err) {
+      res.status(500).json({ error: err instanceof Error ? err.message : 'Unknown error' });
+    }
   });
 
   app.use('/agent', router);

@@ -24,6 +24,7 @@ export async function renderTransactions() {
         <td class="mono">${eth.toFixed(6)} ETH</td>
         <td>${tx.txHash ? `<a href="https://sepolia.etherscan.io/tx/${tx.txHash}" target="_blank" class="mono wallet-addr">${tx.txHash.slice(0,10)}...</a>` : '—'}</td>
         <td class="text-tertiary">${new Date(tx.createdAt).toLocaleString()}</td>
+        <td><button class="explain-tx-btn" data-tx-id="${tx.id || tx.txHash || ''}" title="Explain with AI">&#129302; Explain</button></td>
       </tr>`;
   }).join('');
 
@@ -66,6 +67,7 @@ export async function renderTransactions() {
                 <th>Amount</th>
                 <th>Tx Hash</th>
                 <th>Time</th>
+                <th></th>
               </tr>
             </thead>
             <tbody>${rows}</tbody>

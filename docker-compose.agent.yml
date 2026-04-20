@@ -34,7 +34,7 @@ services:
       retries: 3
     restart: unless-stopped
 
-  # Pull model on first boot (one-shot)
+  # Pull LLM + embeddings models on first boot (one-shot)
   ollama-init:
     image: ollama/ollama:latest
     depends_on:
@@ -43,15 +43,36 @@ services:
     entrypoint: /bin/sh
     command: >
       -c "
-        echo 'Pulling model: ${LLM_MODEL:-qwen2.5:7b-instruct}';
+        echo 'Pulling LLM: ${LLM_MODEL:-qwen2.5:7b-instruct}';
         ollama pull ${LLM_MODEL:-qwen2.5:7b-instruct} || true;
-        echo 'Model ready.';
+        echo 'Pulling embeddings: nomic-embed-text';
+        ollama pull nomic-embed-text || true;
+        echo 'All models ready.';
       "
     environment:
       OLLAMA_HOST: http://ollama:11434
     networks:
       - blue-internal
     restart: "no"
+
+  # Whisper.cpp — free, on-prem speech-to-text server
+  # Uses ggml base.en model (~150MB). Runs on CPU, near real-time.
+  whisper:
+    image: onerahmet/openai-whisper-asr-webservice:latest
+    container_name: blue-whisper
+    environment:
+      ASR_MODEL: base.en
+      ASR_ENGINE: openai_whisper
+    networks:
+      - blue-internal
+    ports:
+      - "8081:9000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:9000/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
   # Blue Agent — tool-calling orchestrator
   blue-agent:
@@ -74,6 +95,8 @@ services:
       AGENT_AUTH_KEY: ${AGENT_AUTH_KEY:-}
       ALLOW_WRITE_TOOLS: "${ALLOW_WRITE_TOOLS:-true}"
       REQUIRE_APPROVAL: "${REQUIRE_APPROVAL:-true}"
+      EMBED_MODEL: nomic-embed-text
+      WHISPER_URL: http://whisper:9000
       LOG_LEVEL: ${LOG_LEVEL:-info}
       CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:3400}
     ports:

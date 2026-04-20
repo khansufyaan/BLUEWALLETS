@@ -33,6 +33,7 @@ import { renderHsmHealth, initHsmHealth, destroyHsmHealth } from './pages/hsm-he
 import { renderMultisig, initMultisig } from './pages/multisig.js';
 import { renderAutomations, initAutomations } from './pages/automations.js';
 import { renderAgent, initAgent } from './pages/agent.js';
+import './explain-tx.js'; // auto-attaches Explain buttons via MutationObserver
 
 // Page imports — management (proxied from Driver)
 import { renderDashboard } from './pages/dashboard.js';

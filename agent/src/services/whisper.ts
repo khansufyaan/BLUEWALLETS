@@ -1,11 +1,11 @@
 /**
  * Whisper Client — on-prem speech-to-text.
  *
- * Uses whisper.cpp server (free, CPU-friendly, no API keys).
- * Default model: ggml-base.en.bin (~150MB, ~real-time on CPU).
+ * Uses openai-whisper-asr-webservice (free, CPU-friendly, no API keys).
+ * Endpoint: POST /asr with multipart field "audio_file"
+ * Default model: base.en (~150MB, ~real-time on CPU).
  *
- * Server: https://github.com/ggerganov/whisper.cpp/tree/master/examples/server
- * Run: ./server -m models/ggml-base.en.bin -l en --port 8081
+ * Server: https://github.com/ahmetoner/whisper-asr-webservice
  */
 
 import { logger } from '../logger';
@@ -14,20 +14,30 @@ export class WhisperClient {
   private url: string;
 
   constructor() {
-    this.url = process.env.WHISPER_URL || 'http://whisper:8081';
+    this.url = process.env.WHISPER_URL || 'http://whisper:9000';
   }
 
   /**
    * Transcribe audio to text.
-   * Accepts WAV, MP3, M4A, OGG.
+   * Accepts WAV, MP3, M4A, OGG, WebM.
    */
-  async transcribe(audioBuffer: Buffer, filename = 'audio.wav'): Promise<{ text: string; language?: string }> {
+  async transcribe(audioBuffer: Buffer, filename = 'audio.webm'): Promise<{ text: string; language?: string }> {
     const form = new FormData();
-    form.append('file', new Blob([audioBuffer]), filename);
-    form.append('temperature', '0');
-    form.append('response_format', 'json');
+    // This ASR webservice expects the field name "audio_file"
+    const mimeType = filename.endsWith('.webm') ? 'audio/webm'
+                   : filename.endsWith('.mp3')  ? 'audio/mpeg'
+                   : filename.endsWith('.m4a')  ? 'audio/mp4'
+                   : filename.endsWith('.ogg')  ? 'audio/ogg'
+                   :                              'audio/wav';
+    form.append('audio_file', new Blob([audioBuffer], { type: mimeType }), filename);
 
-    const res = await fetch(`${this.url}/inference`, {
+    // Use query params for options
+    const params = new URLSearchParams({
+      output: 'json',
+      task: 'transcribe',
+    });
+
+    const res = await fetch(`${this.url}/asr?${params}`, {
       method: 'POST',
       body: form as any,
       signal: AbortSignal.timeout(60_000),
@@ -42,8 +52,10 @@ export class WhisperClient {
 
   async health(): Promise<{ ok: boolean; error?: string }> {
     try {
-      const res = await fetch(`${this.url}/`, { signal: AbortSignal.timeout(3000) });
-      return { ok: res.ok || res.status === 404 }; // 404 is fine, server is up
+      const res = await fetch(`${this.url}/`, { signal: AbortSignal.timeout(3000), redirect: 'manual' });
+      // 200, 307 (redirect to swagger docs), or 404 — any of these mean server is up
+      const ok = res.status === 200 || res.status === 307 || res.status === 404;
+      return { ok, error: ok ? undefined : `HTTP ${res.status}` };
     } catch (err) {
       return { ok: false, error: err instanceof Error ? err.message : 'unknown' };
     }

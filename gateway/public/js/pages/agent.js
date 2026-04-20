@@ -417,19 +417,37 @@ export function initAgent() {
         stream.getTracks().forEach(t => t.stop());
         if (blob.size < 500) return; // Too short
         micBtn.classList.add('agent-mic-processing');
-        try {
-          const res = await fetch(`${AGENT_BASE}/agent/voice/transcribe`, {
+
+        // Try /agent-api first (real gateway proxy), fall back to direct :3500 (dev server)
+        async function doTranscribe(url) {
+          const r = await fetch(url, {
             method: 'POST',
             headers: { 'Content-Type': 'audio/webm' },
             body: blob,
           });
-          if (!res.ok) throw new Error(await res.text());
-          const data = await res.json();
+          if (!r.ok) throw new Error(`HTTP ${r.status}: ${(await r.text()).slice(0, 200)}`);
+          // Reject non-JSON responses (e.g. SPA fallback HTML from dev server)
+          const ct = r.headers.get('content-type') || '';
+          if (!ct.includes('application/json')) throw new Error('Not a JSON response');
+          return r.json();
+        }
+
+        try {
+          let data;
+          try {
+            data = await doTranscribe(`${AGENT_BASE}/agent/voice/transcribe`);
+          } catch {
+            // Fallback: direct to agent on :3500
+            const origin = window.location.origin.replace(/:\d+$/, ':3500');
+            data = await doTranscribe(`${origin}/agent/voice/transcribe`);
+          }
           if (data.text) {
             input.value = (input.value ? input.value + ' ' : '') + data.text;
             input.focus();
             input.style.height = 'auto';
             input.style.height = Math.min(input.scrollHeight, 200) + 'px';
+          } else {
+            alert('No speech detected — please try again and speak clearly.');
           }
         } catch (err) {
           console.warn('Voice transcription failed:', err);

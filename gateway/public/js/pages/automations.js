@@ -142,12 +142,19 @@ export async function renderAutomations() {
 
       <!-- Create/Edit Automation Modal -->
       <div class="modal-overlay" id="auto-modal">
-        <div class="modal" style="max-width:620px">
-          <div class="modal-header">
-            <h3>Create Automation</h3>
-            <button class="modal-close" id="auto-modal-close">&times;</button>
+        <div class="modal auto-modal">
+          <div class="auto-modal-header">
+            <div>
+              <div class="auto-modal-eyebrow">Automation</div>
+              <h3 class="auto-modal-title">Create Automation</h3>
+              <div class="auto-modal-sub">Build a rule that runs when something happens.</div>
+            </div>
+            <button class="modal-close auto-modal-close" id="auto-modal-close" aria-label="Close">
+              <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M4 4l10 10M14 4L4 14"/></svg>
+            </button>
           </div>
-          <form id="auto-form">
+          <form id="auto-form" class="auto-modal-form">
+            <div class="auto-modal-body">
             <!-- Name -->
             <div class="form-group">
               <label class="form-label">Automation Name</label>
@@ -314,8 +321,9 @@ export async function renderAutomations() {
               </div>
             </div>
 
-            <div class="modal-footer">
-              <button type="button" class="btn" id="auto-cancel">Cancel</button>
+            </div><!-- /.auto-modal-body -->
+            <div class="auto-modal-footer">
+              <button type="button" class="btn btn-ghost" id="auto-cancel">Cancel</button>
               <button type="submit" class="btn btn-primary">Create Automation</button>
             </div>
           </form>

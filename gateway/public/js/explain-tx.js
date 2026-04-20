@@ -13,17 +13,24 @@ function esc(s) {
     .replace(/[<>&"']/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
+async function jsonFetch(url, opts = {}) {
+  const res = await fetch(url, opts);
+  const ct = res.headers.get('content-type') || '';
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  // Reject non-JSON responses (SPA fallback from dev server)
+  if (!ct.includes('application/json')) {
+    throw new Error('Non-JSON response — agent proxy likely not configured');
+  }
+  return res.json();
+}
+
 async function agentCall(path, opts = {}) {
   try {
-    const res = await fetch(`${AGENT_BASE}${path}`, opts);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
+    return await jsonFetch(`${AGENT_BASE}${path}`, opts);
   } catch {
     // Fallback: direct to :3500
     const origin = window.location.origin.replace(/:\d+$/, ':3500');
-    const res = await fetch(`${origin}${path}`, opts);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    return await res.json();
+    return await jsonFetch(`${origin}${path}`, opts);
   }
 }
 

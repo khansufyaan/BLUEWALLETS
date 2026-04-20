@@ -23,31 +23,44 @@ function fmtTime(d) {
   return dt.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit' });
 }
 
-async function agentRequest(path, opts = {}) {
+// Perform a JSON fetch — throws if response is not OK OR not JSON.
+// Non-JSON responses typically mean the request hit the SPA fallback
+// (static dev server) instead of the real agent service.
+async function jsonFetch(url, opts = {}) {
   const token = sessionStorage.getItem('blueSessionToken') || '';
   const headers = { 'Content-Type': 'application/json', ...(opts.headers || {}) };
   if (token) headers['Authorization'] = `Bearer ${token}`;
-
-  const res = await fetch(`${AGENT_BASE}${path}`, { ...opts, headers });
+  const res = await fetch(url, { ...opts, headers });
+  const ct = res.headers.get('content-type') || '';
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
+    const body = ct.includes('json') ? await res.json().catch(() => ({})) : {};
     throw new Error(body.error || `HTTP ${res.status}`);
+  }
+  if (!ct.includes('application/json')) {
+    // Not an agent response — caller should try the fallback
+    throw new Error('Non-JSON response (likely SPA fallback — agent proxy not configured)');
   }
   return res.json();
 }
 
-// Fallback: try direct to agent on :3500 if gateway proxy isn't configured
+// Try /agent-api first (real gateway proxy). If it returns non-JSON,
+// fall back to direct http://host:3500/agent/* (dev mode with no proxy).
 async function agentRequestDirect(path, opts = {}) {
   try {
-    return await agentRequest(path, opts);
-  } catch (err) {
-    // Try direct
-    const origin = window.location.origin.replace(/:\d+$/, ':3500');
-    const res = await fetch(`${origin}${path}`, opts);
-    if (!res.ok) throw err; // propagate original error if direct also fails
-    return res.json();
+    return await jsonFetch(`${AGENT_BASE}${path}`, opts);
+  } catch (proxyErr) {
+    try {
+      const origin = window.location.origin.replace(/:\d+$/, ':3500');
+      return await jsonFetch(`${origin}${path}`, opts);
+    } catch (directErr) {
+      // Surface the more useful error (usually the direct one has the real problem)
+      throw directErr;
+    }
   }
 }
+
+// Back-compat alias
+const agentRequest = agentRequestDirect;
 
 export async function renderAgent() {
   let health = null;

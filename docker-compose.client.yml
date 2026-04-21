@@ -60,6 +60,11 @@ services:
       - LOG_LEVEL=${LOG_LEVEL:-info}
     volumes:
       - ./certs:/app/certs:ro
+      # Luna HSM client — mounted at identical paths so absolute paths in
+      # Chrystoki.conf resolve unchanged inside the container. Override
+      # LUNA_CLIENT_PATH / CHRYSTOKI_CONF_PATH in .env for non-standard installs.
+      - ${LUNA_CLIENT_PATH:-/usr/safenet/lunaclient}:/usr/safenet/lunaclient:ro
+      - ${CHRYSTOKI_CONF_PATH:-/etc/Chrystoki.conf}:/etc/Chrystoki.conf:ro
     networks:
       - internal
     depends_on:

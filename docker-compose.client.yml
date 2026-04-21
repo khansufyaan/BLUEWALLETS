@@ -46,8 +46,10 @@ services:
     image: ghcr.io/khansufyaan/blue-driver:latest
     container_name: blue-driver
     ports:
-      - "${DRIVER_PORT:-443}:3100"    # Driver dashboard (default 443 for enterprise)
-      - "${INTERNAL_PORT:-3200}:3200" # Internal API (mTLS)
+      # Single-VM enterprise layout: Driver dashboard on 80 (one-time key ceremony),
+      # Console Ops on 443 (daily use). Override DRIVER_PORT to change.
+      - "${DRIVER_PORT:-80}:3100"     # Driver dashboard (key ceremony)
+      - "${INTERNAL_PORT:-3200}:3200" # Internal API (mTLS, docker network only)
     environment:
       - PORT=3100
       - INTERNAL_PORT=3200
@@ -83,10 +85,12 @@ services:
     image: ghcr.io/khansufyaan/blue-console:latest
     container_name: blue-console
     ports:
-      # Enterprise VMs typically only permit 80 + 443 externally — map to those
-      # by default. Override with env vars for dev/local.
-      - "${API_PORT:-80}:3100"        # Bank-facing API  (container :3100)
+      # Enterprise VMs typically only permit 80 + 443 externally. Driver holds 80
+      # (key ceremony), Console Ops holds 443 (daily dashboard). Bank API is
+      # mapped to a local-only port (3300) — reachable from the VM for testing,
+      # but production clients reach it via an upstream reverse proxy.
       - "${OPS_PORT_EXT:-443}:3400"   # Ops dashboard    (container :3400)
+      - "127.0.0.1:${API_PORT:-3300}:3100"  # Bank-facing API (loopback only)
     environment:
       - PORT=3100
       - OPS_PORT=3400

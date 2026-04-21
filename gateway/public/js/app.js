@@ -34,6 +34,7 @@ import { renderMultisig, initMultisig } from './pages/multisig.js';
 import { renderAutomations, initAutomations } from './pages/automations.js';
 import { renderAgent, initAgent } from './pages/agent.js';
 import './explain-tx.js'; // auto-attaches Explain buttons via MutationObserver
+import { initCommandPalette, initApprovalsBadge } from './command-palette.js';
 
 // Page imports — management (proxied from Driver)
 import { renderDashboard } from './pages/dashboard.js';
@@ -310,5 +311,9 @@ document.addEventListener('click', (e) => {
 });
 
 window.addEventListener('hashchange', route);
-window.addEventListener('load', route);
+window.addEventListener('load', () => {
+  route();
+  initCommandPalette();
+  initApprovalsBadge();
+});
 window.addEventListener('session-expired', () => showLogin());

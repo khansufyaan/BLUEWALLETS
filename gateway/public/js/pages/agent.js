@@ -86,43 +86,33 @@ export async function renderAgent() {
           </div>
         </div>
         <div class="agent-status-right">
-          <span class="text-xs text-muted">${health?.tools || 0} tools available</span>
-          <button class="btn btn-sm btn-primary" id="agent-new-btn">+ New Conversation</button>
+          <button class="btn btn-sm btn-ghost" id="agent-show-tools">${health?.tools || 0} tools</button>
+          <button class="btn btn-sm btn-primary" id="agent-new-btn">+ New</button>
         </div>
       </div>
 
-      <div class="agent-layout">
-        <!-- Sidebar: conversation list -->
-        <aside class="agent-sidebar">
-          <div class="agent-sidebar-title">Conversations</div>
-          <div class="agent-convo-list" id="agent-convo-list">
-            ${conversations.length === 0
-              ? '<div class="text-xs text-muted" style="padding:var(--sp-3)">No conversations yet. Start one →</div>'
-              : conversations.map(c => `
-                  <div class="agent-convo-item" data-id="${esc(c.id)}">
-                    <div class="agent-convo-title">${esc(c.title)}</div>
-                    <div class="agent-convo-meta">${c.messageCount} msgs · ${fmtTime(c.updatedAt)}</div>
-                  </div>
-                `).join('')}
-          </div>
-          <div class="agent-sidebar-footer">
-            <button class="btn btn-sm btn-ghost" id="agent-show-tools">View tools</button>
-          </div>
-        </aside>
-
-        <!-- Main: chat panel -->
+      <div class="agent-layout agent-layout-solo">
+        <!-- Main: chat panel (full width — no sidebar) -->
         <main class="agent-main">
           <div class="agent-messages" id="agent-messages">
             <div class="agent-welcome">
-              <div class="agent-welcome-icon">&#129302;</div>
-              <h2>Blue Wallets Assistant</h2>
-              <p>Ask questions about wallets, vaults, transactions, HSM status, or system health. I can also perform administrative actions with your approval.</p>
+              <div class="agent-welcome-logo">
+                <!-- Visa wordmark -->
+                <svg viewBox="0 0 1000 324" xmlns="http://www.w3.org/2000/svg" aria-label="Visa">
+                  <path fill="#1434CB" d="M433.4 220.4h-52.5L413.5 31.5h52.5L433.4 220.4zM641.3 36.2c-10.4-4.1-26.7-8.5-47-8.5-51.9 0-88.5 27.6-88.8 67.2-.3 29.2 26.1 45.5 46 55.3 20.4 10 27.3 16.4 27.2 25.3-.1 13.6-16.4 19.8-31.5 19.8-21.1 0-32.3-3.1-49.6-10.6l-6.8-3.2-7.4 45.6c12.3 5.6 35 10.5 58.6 10.7 55.2 0 91.1-27.2 91.5-69.5.2-23.1-13.9-40.7-44.4-55.3-18.5-9.4-29.8-15.7-29.7-25.3 0-8.5 9.7-17.6 30.6-17.6 17.5-.3 30.2 3.7 40.1 7.9l4.8 2.4 7.3-44.2M740.1 31.5c-11.7 0-20.5 3.4-25.7 15.7L638.3 220.4h55.3l11-30.5h67.5l6.4 30.5H828L787.4 31.5h-47.3m-20.8 138.5c4.3-11.6 20.9-56.3 20.9-56.3-.3.5 4.3-11.6 6.9-19.2l3.6 17.3s10 48.4 12.1 58.2h-43.5zM329.3 31.5L277.8 160.7l-5.5-27.7c-9.6-31.9-39.8-66.4-73.7-83.7l47.1 170.9 55.8-.1 83-189.6h-55.2"/>
+                  <path fill="#1434CB" d="M226.2 31.5H141.2l-.7 4.1c66.2 16.4 109.9 56 128.1 103.7L250.2 47.5c-3.2-12.5-12.3-15.6-23.5-16h-.5"/>
+                </svg>
+              </div>
+              <h2>Blue Wallet Agent</h2>
               <div class="agent-suggestions">
                 <button class="agent-suggestion" data-prompt="How many wallets do we have and what chains are they on?">How many wallets do we have?</button>
                 <button class="agent-suggestion" data-prompt="Show me the most recent 5 transactions">Recent transactions</button>
                 <button class="agent-suggestion" data-prompt="What is the HSM status right now?">HSM status</button>
                 <button class="agent-suggestion" data-prompt="Are there any failed transactions in the last 24 hours?">Any failures today?</button>
-                <button class="agent-suggestion" data-prompt="Create a new vault called Test Ceremony Vault">Create a test vault</button>
+                <button class="agent-suggestion" data-prompt="Create a new vault called Test Vault">Create a test vault</button>
+                <button class="agent-suggestion" data-prompt="Create 20 ETH wallets in the default vault named hot-1 through hot-20">Create 20 ETH wallets</button>
+                <button class="agent-suggestion" data-prompt="Draft a policy that blocks any outbound transfer over 10 ETH unless 2 admins approve">Draft a spending policy</button>
+                <button class="agent-suggestion" data-prompt="Explain what happened with the most recent failed transaction">Explain last failure</button>
               </div>
             </div>
           </div>
@@ -143,9 +133,6 @@ export async function renderAgent() {
               <button class="btn btn-primary" id="agent-send" ${llmOk ? '' : 'disabled'}>Send</button>
             </div>
             <div class="agent-input-hint">
-              <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;margin-right:12px">
-                <input type="checkbox" id="agent-tts-toggle" style="margin:0"> Speak responses
-              </label>
               ${llmOk
                 ? `<span>All queries run on-prem · No data leaves your infrastructure</span>`
                 : `<span class="text-red">Start the agent stack: <code>docker-compose -f docker-compose.agent.yml up -d</code></span>`}
@@ -209,23 +196,6 @@ export function initAgent() {
         <h2>New conversation started</h2>
         <p>Ask anything about the system.</p>
       </div>`;
-  });
-
-  // Load existing conversation
-  document.querySelectorAll('.agent-convo-item').forEach(item => {
-    item.addEventListener('click', async () => {
-      const id = item.dataset.id;
-      try {
-        const data = await agentRequestDirect(`/agent/conversations/${id}`);
-        _conversationId = id;
-        messagesEl.innerHTML = '';
-        data.messages.forEach(m => appendMessage(m));
-        document.querySelectorAll('.agent-convo-item').forEach(i => i.classList.remove('active'));
-        item.classList.add('active');
-      } catch (err) {
-        alert('Failed to load: ' + err.message);
-      }
-    });
   });
 
   // Tools modal
@@ -539,7 +509,6 @@ export function initAgent() {
   let _isRecording = false;
 
   const micBtn = document.getElementById('agent-mic');
-  const ttsToggle = document.getElementById('agent-tts-toggle');
 
   async function startRecording() {
     if (_isRecording) return;
@@ -616,22 +585,9 @@ export function initAgent() {
   micBtn?.addEventListener('touchstart', (e) => { e.preventDefault(); startRecording(); });
   micBtn?.addEventListener('touchend', (e) => { e.preventDefault(); stopRecording(); });
 
-  // TTS — use free browser Web Speech API (works offline on most browsers)
-  function speak(text) {
-    if (!ttsToggle?.checked) return;
-    if (!('speechSynthesis' in window)) return;
-    const utter = new SpeechSynthesisUtterance(text.replace(/[*_`#]/g, '').slice(0, 500));
-    utter.rate = 1.05;
-    utter.pitch = 1.0;
-    window.speechSynthesis.cancel();
-    window.speechSynthesis.speak(utter);
-  }
-  // Stop speaking when user starts typing
-  input?.addEventListener('input', () => { if (window.speechSynthesis?.speaking) window.speechSynthesis.cancel(); });
-
-  // Attach speak() to assistant messages
-  const origAppendMessage = appendMessage;
-  window._speak = speak;
+  // TTS removed — was rarely used and cluttered the input hint line.
+  // If speak-response is needed in the future, add back via a mic-menu popover.
+  window._speak = () => {};
 
   function renderMarkdown(text) {
     // Minimal safe markdown: code blocks, inline code, bold, italic, links, line breaks

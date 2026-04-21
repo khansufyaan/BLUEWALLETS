@@ -83,8 +83,10 @@ services:
     image: ghcr.io/khansufyaan/blue-console:latest
     container_name: blue-console
     ports:
-      - "3300:3100"          # Bank-facing API
-      - "3400:3400"          # Ops dashboard
+      # Enterprise VMs typically only permit 80 + 443 externally — map to those
+      # by default. Override with env vars for dev/local.
+      - "${API_PORT:-80}:3100"        # Bank-facing API  (container :3100)
+      - "${OPS_PORT_EXT:-443}:3400"   # Ops dashboard    (container :3400)
     environment:
       - PORT=3100
       - OPS_PORT=3400
@@ -98,6 +100,9 @@ services:
       - CORS_ORIGIN=${CORS_ORIGIN:-}
       - LOG_LEVEL=${LOG_LEVEL:-info}
       - AGENT_URL=${AGENT_URL:-http://blue-agent:3500}
+      # Ops Dashboard TLS — off by default (self-signed cert on a VM IP is blocked
+      # by Chrome). Set to "false" to re-enable when fronting with a proper CA cert.
+      - OPS_TLS_DISABLE=${OPS_TLS_DISABLE:-true}
     volumes:
       - ./certs:/app/certs:ro
     networks:

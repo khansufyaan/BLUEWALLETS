@@ -1005,9 +1005,10 @@ tr:hover td {
 
 /* Visa wordmark in welcome screen */
 .agent-welcome-logo {
-  width: 140px;
+  width: 420px;
+  max-width: 70%;
   height: auto;
-  margin: 0 auto var(--sp-5);
+  margin: 0 auto var(--sp-6);
   animation: agent-logo-in 0.6s var(--ease-snappy);
 }
 .agent-welcome-logo svg {

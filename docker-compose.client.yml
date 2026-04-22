@@ -58,6 +58,13 @@ services:
       - INTERNAL_AUTH_KEY=${INTERNAL_AUTH_KEY:?INTERNAL_AUTH_KEY is required}
       - DATABASE_URL=postgresql://blue:${POSTGRES_PASSWORD}@postgres:5432/bluewallets
       - LOG_LEVEL=${LOG_LEVEL:-info}
+      # ChrystokiConfigurationPath tells the Luna PKCS#11 library where to
+      # find Chrystoki.conf. The host file is bind-mounted to /etc/Chrystoki.conf.
+      - ChrystokiConfigurationPath=/etc
+    # The Luna client certs on the host are owned by group 'hsmusers' (gid 986).
+    # Add that group so the non-root 'blue' user inside the container can read them.
+    group_add:
+      - "986"
     volumes:
       - ./certs:/app/certs:ro
       # Luna HSM client — mounted at identical paths so absolute paths in

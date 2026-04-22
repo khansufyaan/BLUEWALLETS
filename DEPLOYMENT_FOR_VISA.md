@@ -395,6 +395,89 @@ Then try `docker compose up -d` again.
 
 Same cause as above — missing `.env`. Run `./setup.sh`.
 
+### "No HSM slots with tokens found" when connecting to Luna HSM
+
+The PKCS#11 library loads and initializes successfully, but `C_GetSlotList(true)` returns
+zero slots — meaning the Luna client can see slot descriptors but cannot authenticate to
+any HSM partition. This was resolved by fixing three issues:
+
+**Root Cause 1 — Missing `ChrystokiConfigurationPath` environment variable**
+
+The Luna PKCS#11 library (`libCryptoki2_64.so`) locates its configuration file
+(`Chrystoki.conf`) using the `ChrystokiConfigurationPath` environment variable. Without it,
+the library cannot find the server connection details (hostname, port, certificates), so it
+sees slots but no tokens. The fix was adding this to `docker-compose.client.yml`:
+
+```yaml
+environment:
+  - ChrystokiConfigurationPath=/etc
+```
+
+This tells the Luna library to look for `/etc/Chrystoki.conf`, which is bind-mounted from
+the host.
+
+**Root Cause 2 — Certificate file permissions**
+
+The container runs as non-root user `blue` (uid 1001), but the Luna client certificates on
+the host are owned by `root:hsmusers` (gid 986) with restrictive permissions. The Luna
+library needs to read the client private key and certificate to establish the mTLS connection
+to the HSM appliance. Without read access, the mTLS handshake fails silently and no tokens
+appear.
+
+Fix — add the `hsmusers` group to the container user:
+```yaml
+group_add:
+  - "986"    # hsmusers group on the host
+```
+
+And ensure group-read permissions on the host:
+```bash
+chmod g+r  /usr/safenet/lunaclient/cert/client/10.207.217.22.pem
+chmod g+r  /usr/safenet/lunaclient/cert/client/10.207.217.22Key.pem
+chmod g+rx /usr/safenet/lunaclient/cert/client/
+chmod g+rx /usr/safenet/lunaclient/cert/
+chmod o+r  /etc/Chrystoki.conf
+```
+
+**Root Cause 3 — Container not recreated after compose changes**
+
+Docker Compose only applies environment and volume changes when containers are recreated,
+not just restarted. After editing `docker-compose.client.yml`, always use:
+
+```bash
+docker compose -f docker-compose.client.yml down
+docker compose -f docker-compose.client.yml up -d --force-recreate
+```
+
+**Verification — confirm the fix inside the container:**
+```bash
+# Env var is set
+docker exec blue-driver env | grep -i chrystoki
+# → ChrystokiConfigurationPath=/etc
+
+# User has the hsmusers group
+docker exec blue-driver id
+# → uid=1001(blue) gid=1001(blue) groups=1001(blue),986
+
+# Config file is readable
+docker exec blue-driver cat /etc/Chrystoki.conf
+
+# Certs are readable
+docker exec blue-driver ls -la /usr/safenet/lunaclient/cert/client/
+docker exec blue-driver ls -la /usr/safenet/lunaclient/cert/server/
+
+# Slots now show tokens
+docker exec blue-driver node -e "
+const p = require('pkcs11js');
+const pk = new p.PKCS11();
+pk.load('/usr/safenet/lunaclient/lib/libCryptoki2_64.so');
+pk.C_Initialize();
+console.log('Slots with tokens:', pk.C_GetSlotList(true).length);
+pk.C_Finalize();
+"
+# → Slots with tokens: 1 (or more)
+```
+
 ### "HSM signing failed" in logs
 
 Check the Driver logs for the actual error (fixed in this release — errors now include stack traces):

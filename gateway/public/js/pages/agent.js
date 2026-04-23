@@ -135,7 +135,7 @@ export async function renderAgent() {
             <div class="agent-input-hint">
               ${llmOk
                 ? `<span>All queries run on-prem · No data leaves your infrastructure</span>`
-                : `<span class="text-red">Start the agent stack: <code>docker-compose -f docker-compose.agent.yml up -d</code></span>`}
+                : `<span class="text-red">Start the agent stack: <code>docker compose -f docker-compose.client.yml -f docker-compose.agent.yml up -d</code></span>`}
             </div>
           </div>
         </main>
